@@ -1,0 +1,28 @@
+# Dependencies
+node_modules/
+**/node_modules/
+
+# Ephemeral replay ingestion stash
+temp_slp/*
+!temp_slp/.gitkeep
+
+# SQLite temporary journal files
+*.db-wal
+*.db-shm
+
+# Test runtime outputs
+test_payloads/
+test_analytics.db*
+
+# OS and Editor artifacts
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+.idea/
+.vscode/
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*

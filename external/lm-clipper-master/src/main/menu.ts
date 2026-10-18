@@ -1,0 +1,420 @@
+import {
+  app,
+  dialog,
+  Menu,
+  shell,
+  BrowserWindow,
+  MenuItemConstructorOptions,
+} from 'electron'
+
+const REPO_URL = 'https://github.com/madenney/lm-clipper'
+const ISSUES_URL = 'https://github.com/madenney/lm-clipper/issues'
+const DISCORD_URL = 'https://discord.gg/ThjMCW3F4R'
+
+interface DarwinMenuItemConstructorOptions extends MenuItemConstructorOptions {
+  selector?: string
+  submenu?: DarwinMenuItemConstructorOptions[] | Menu
+}
+
+type RecentProject = { name: string; path: string }
+
+export default class MenuBuilder {
+  mainWindow: BrowserWindow
+
+  recentProjects: RecentProject[]
+
+  constructor(mainWindow: BrowserWindow, recentProjects: RecentProject[] = []) {
+    this.mainWindow = mainWindow
+    this.recentProjects = recentProjects
+  }
+
+  buildMenu(): Menu {
+    if (
+      process.env.NODE_ENV === 'development' ||
+      process.env.DEBUG_PROD === 'true'
+    ) {
+      this.setupDevelopmentEnvironment()
+    }
+
+    const template =
+      process.platform === 'darwin'
+        ? this.buildDarwinTemplate()
+        : this.buildDefaultTemplate()
+
+    const menu = Menu.buildFromTemplate(
+      template as MenuItemConstructorOptions[],
+    )
+    Menu.setApplicationMenu(menu)
+
+    return menu
+  }
+
+  setupDevelopmentEnvironment(): void {
+    this.mainWindow.webContents.on('context-menu', (_, props) => {
+      const { x, y } = props
+
+      Menu.buildFromTemplate([
+        {
+          label: 'Inspect element',
+          click: () => {
+            this.mainWindow.webContents.inspectElement(x, y)
+          },
+        },
+      ]).popup({ window: this.mainWindow })
+    })
+  }
+
+  private buildRecentSubmenu(): MenuItemConstructorOptions[] {
+    const recents = this.recentProjects.slice(0, 3)
+    if (recents.length === 0) {
+      return [{ label: 'No Recent Projects', enabled: false }]
+    }
+    return recents.map((p) => ({
+      label: p.name,
+      click: () => {
+        this.mainWindow.webContents.send('openRecentFromMenu', p.path)
+      },
+    }))
+  }
+
+  private showAbout(): void {
+    dialog.showMessageBox(this.mainWindow, {
+      type: 'info',
+      title: 'About Lunar Clipper',
+      message: 'Lunar Clipper',
+      detail: `Version ${app.getVersion()}\nGenerate Melee clips from Slippi replays.\n\n${REPO_URL}`,
+      buttons: ['OK'],
+    })
+  }
+
+  private buildHelpSubmenu(): MenuItemConstructorOptions[] {
+    return [
+      {
+        label: 'Welcome / Getting Started',
+        click: () => {
+          this.mainWindow.webContents.send('showWelcome')
+        },
+      },
+      {
+        label: 'Check for Updates…',
+        click: () => {
+          this.mainWindow.webContents.send('trigger-update-check')
+        },
+      },
+      { type: 'separator' },
+      {
+        label: 'Lunar Clipper on GitHub',
+        click: () => {
+          shell.openExternal(REPO_URL)
+        },
+      },
+      {
+        label: 'Report an Issue',
+        click: () => {
+          shell.openExternal(ISSUES_URL)
+        },
+      },
+      {
+        label: 'Community Discord',
+        click: () => {
+          shell.openExternal(DISCORD_URL)
+        },
+      },
+      { type: 'separator' },
+      {
+        label: 'About Lunar Clipper',
+        click: () => {
+          this.showAbout()
+        },
+      },
+    ]
+  }
+
+  buildDarwinTemplate(): MenuItemConstructorOptions[] {
+    const subMenuAbout: DarwinMenuItemConstructorOptions = {
+      label: 'Electron',
+      submenu: [
+        {
+          label: 'About ElectronReact',
+          selector: 'orderFrontStandardAboutPanel:',
+        },
+        { type: 'separator' },
+        { label: 'Services', submenu: [] },
+        { type: 'separator' },
+        {
+          label: 'Hide ElectronReact',
+          accelerator: 'Command+H',
+          selector: 'hide:',
+        },
+        {
+          label: 'Hide Others',
+          accelerator: 'Command+Shift+H',
+          selector: 'hideOtherApplications:',
+        },
+        { label: 'Show All', selector: 'unhideAllApplications:' },
+        { type: 'separator' },
+        {
+          label: 'Quit',
+          accelerator: 'Command+Q',
+          click: () => {
+            app.quit()
+          },
+        },
+      ],
+    }
+    const subMenuEdit: DarwinMenuItemConstructorOptions = {
+      label: 'Edit',
+      submenu: [
+        { label: 'Undo', accelerator: 'Command+Z', selector: 'undo:' },
+        { label: 'Redo', accelerator: 'Shift+Command+Z', selector: 'redo:' },
+        { type: 'separator' },
+        { label: 'Cut', accelerator: 'Command+X', selector: 'cut:' },
+        { label: 'Copy', accelerator: 'Command+C', selector: 'copy:' },
+        { label: 'Paste', accelerator: 'Command+V', selector: 'paste:' },
+        {
+          label: 'Select All',
+          accelerator: 'Command+A',
+          selector: 'selectAll:',
+        },
+      ],
+    }
+    const subMenuViewDev: MenuItemConstructorOptions = {
+      label: 'View',
+      submenu: [
+        {
+          label: 'Restart',
+          accelerator: 'Command+Shift+R',
+          click: () => {
+            this.mainWindow.webContents.reload()
+          },
+        },
+        {
+          label: 'Toggle Full Screen',
+          accelerator: 'Ctrl+Command+F',
+          click: () => {
+            this.mainWindow.setFullScreen(!this.mainWindow.isFullScreen())
+          },
+        },
+        {
+          label: 'Toggle Developer Tools',
+          accelerator: 'Alt+Command+I',
+          click: () => {
+            this.mainWindow.webContents.toggleDevTools()
+          },
+        },
+      ],
+    }
+    const subMenuViewProd: MenuItemConstructorOptions = {
+      label: 'View',
+      submenu: [
+        {
+          label: 'Toggle Full Screen',
+          accelerator: 'Ctrl+Command+F',
+          click: () => {
+            this.mainWindow.setFullScreen(!this.mainWindow.isFullScreen())
+          },
+        },
+      ],
+    }
+    const subMenuFile: DarwinMenuItemConstructorOptions = {
+      label: 'File',
+      submenu: [
+        {
+          label: 'New Project',
+          accelerator: 'Command+N',
+          click: () => {
+            this.mainWindow.webContents.send('menu:newProject')
+          },
+        },
+        {
+          label: 'Open Project',
+          accelerator: 'Command+O',
+          click: () => {
+            this.mainWindow.webContents.send('openProject')
+          },
+        },
+        {
+          label: 'Open Recent',
+          submenu: this.buildRecentSubmenu(),
+        },
+        {
+          label: 'Save As...',
+          accelerator: 'Command+Shift+S',
+          click: () => {
+            this.mainWindow.webContents.send('saveAsProject')
+          },
+        },
+        { type: 'separator' },
+        {
+          label: 'Import Slippi Replays',
+          accelerator: 'Command+I',
+          click: () => {
+            this.mainWindow.webContents.send('importSlpClicked')
+          },
+        },
+        { type: 'separator' },
+        {
+          label: 'Refresh Project',
+          accelerator: 'Command+R',
+          click: () => {
+            this.mainWindow.webContents.send('refreshProject')
+          },
+        },
+        { type: 'separator' },
+        {
+          label: 'Close Project',
+          accelerator: 'Command+W',
+          click: () => {
+            this.mainWindow.webContents.send('closeProject')
+          },
+        },
+      ],
+    }
+    const subMenuWindow: DarwinMenuItemConstructorOptions = {
+      label: 'Window',
+      submenu: [
+        {
+          label: 'Minimize',
+          accelerator: 'Command+M',
+          selector: 'performMiniaturize:',
+        },
+        { type: 'separator' },
+        { label: 'Bring All to Front', selector: 'arrangeInFront:' },
+      ],
+    }
+    const subMenuHelp: MenuItemConstructorOptions = {
+      label: 'Help',
+      submenu: this.buildHelpSubmenu(),
+    }
+
+    const subMenuView =
+      process.env.NODE_ENV === 'development' ||
+      process.env.DEBUG_PROD === 'true'
+        ? subMenuViewDev
+        : subMenuViewProd
+
+    return [
+      subMenuAbout,
+      subMenuFile,
+      subMenuEdit,
+      subMenuView,
+      subMenuWindow,
+      subMenuHelp,
+    ]
+  }
+
+  buildDefaultTemplate() {
+    const templateDefault = [
+      {
+        label: '&File',
+        submenu: [
+          {
+            label: '&New Project',
+            accelerator: 'Ctrl+N',
+            click: () => {
+              this.mainWindow.webContents.send('menu:newProject')
+            },
+          },
+          {
+            label: '&Open Project',
+            accelerator: 'Ctrl+O',
+            click: () => {
+              this.mainWindow.webContents.send('openProject')
+            },
+          },
+          {
+            label: 'Open &Recent',
+            submenu: this.buildRecentSubmenu(),
+          },
+          {
+            label: '&Save As...',
+            accelerator: 'Ctrl+Shift+S',
+            click: () => {
+              this.mainWindow.webContents.send('saveAsProject')
+            },
+          },
+          { type: 'separator' },
+          {
+            label: '&Import Slippi Replays',
+            accelerator: 'Ctrl+I',
+            click: () => {
+              this.mainWindow.webContents.send('importSlpClicked')
+            },
+          },
+          { type: 'separator' },
+          {
+            label: '&Refresh Project',
+            accelerator: 'Ctrl+R',
+            click: () => {
+              this.mainWindow.webContents.send('refreshProject')
+            },
+          },
+          { type: 'separator' },
+          {
+            label: '&Close Project',
+            accelerator: 'Ctrl+W',
+            click: () => {
+              this.mainWindow.webContents.send('closeProject')
+            },
+          },
+          {
+            label: '&Quit Application',
+            accelerator: 'Ctrl+Q',
+            click: () => {
+              this.mainWindow.close()
+            },
+          },
+        ],
+      },
+      {
+        label: '&View',
+        submenu:
+          process.env.NODE_ENV === 'development' ||
+          process.env.DEBUG_PROD === 'true'
+            ? [
+                {
+                  label: '&Restart',
+                  accelerator: 'Ctrl+Shift+R',
+                  click: () => {
+                    app.relaunch()
+                    app.exit(0)
+                  },
+                },
+                {
+                  label: 'Toggle &Full Screen',
+                  accelerator: 'F11',
+                  click: () => {
+                    this.mainWindow.setFullScreen(
+                      !this.mainWindow.isFullScreen(),
+                    )
+                  },
+                },
+                {
+                  label: 'Toggle &Developer Tools',
+                  accelerator: 'Alt+Ctrl+I',
+                  click: () => {
+                    this.mainWindow.webContents.toggleDevTools()
+                  },
+                },
+              ]
+            : [
+                {
+                  label: 'Toggle &Full Screen',
+                  accelerator: 'F11',
+                  click: () => {
+                    this.mainWindow.setFullScreen(
+                      !this.mainWindow.isFullScreen(),
+                    )
+                  },
+                },
+              ],
+      },
+      {
+        label: 'Help',
+        submenu: this.buildHelpSubmenu(),
+      },
+    ]
+
+    return templateDefault
+  }
+}

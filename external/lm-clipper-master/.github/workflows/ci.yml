@@ -1,0 +1,85 @@
+name: CI
+
+on: [push, pull_request]
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Test
+        run: npm test
+
+  typecheck:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      # Ratchet gate: fails if tsc errors exceed the committed baseline
+      # (.tsc-error-baseline), so no NEW type errors land while the existing
+      # backlog is burned down. See .erb/scripts/tsc-ratchet.js.
+      - name: Typecheck (ratchet)
+        run: npm run typecheck:ratchet
+
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      # Real gate (no `|| true`): fail on high/critical vulns in PRODUCTION
+      # deps only. Dev-tooling advisories (webpack-dev-server etc.) don't ship,
+      # so they don't block; keep them visible via the non-omit line below.
+      - name: Audit (production deps)
+        run: npm audit --omit=dev --audit-level=high
+
+      - name: Audit (all, advisory only)
+        run: npm audit --audit-level=high || true

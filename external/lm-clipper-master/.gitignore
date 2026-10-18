@@ -1,0 +1,40 @@
+# Logs
+logs
+*.log
+
+# Runtime data
+pids
+*.pid
+*.seed
+
+# Coverage directory used by tools like istanbul
+coverage
+.eslintcache
+
+# Dependency directory
+# https://www.npmjs.org/doc/misc/npm-faq.html#should-i-check-my-node_modules-folder-into-git
+node_modules
+
+release/app/dist
+release/app/ffmpeg
+release/app/node_modules
+release/app/output
+release/app/package-lock.json
+.erb/dll
+
+.idea
+npm-debug.log.*
+*.css.d.ts
+*.sass.d.ts
+*.scss.d.ts
+
+.vscode
+
+ffmpeg/*
+!ffmpeg/README.md
+
+# Dev artifacts
+build/
+test_replays/
+"[object Object]"
+TODO.md

@@ -1,0 +1,26 @@
+{
+  "include": ["src", "types", "test"],
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "esnext",
+    "lib": ["dom", "esnext"],
+    "importHelpers": false,
+    "declaration": true,
+    "sourceMap": true,
+    "declarationMap": true,
+    "declarationDir": "./dist",
+    "strict": true,
+    "strictNullChecks": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noImplicitReturns": true,
+    "noFallthroughCasesInSwitch": true,
+    "noUncheckedIndexedAccess": true,
+    "moduleResolution": "node",
+    "esModuleInterop": true,
+    "resolveJsonModule": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "downlevelIteration": true
+  }
+}

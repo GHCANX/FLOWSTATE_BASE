@@ -1,0 +1,1808 @@
+/* eslint-disable no-await-in-loop */
+/*
+
+Where the magic happens.
+
+If you're here to see how to convert slp to mp4, I recommend starting here:
+https://github.com/kevinsung/slp-to-video
+
+*/
+
+import {
+  ChildProcess,
+  ChildProcessWithoutNullStreams,
+  spawn,
+} from 'child_process'
+import { app } from 'electron'
+import crypto from 'crypto'
+import fs, { promises as fsPromises } from 'fs'
+import path from 'path'
+import readline from 'readline'
+import { SlippiGame } from '@slippi/slippi-js'
+import os from 'os'
+import { GAME_START_FRAME } from '../constants/frames'
+
+import { buildReplayVars, applyPattern } from '../lib/overlayTokens'
+import { getFFMPEGPath, getAssetPath } from './util'
+import { renderOverlayPng } from './overlayRenderer'
+import { logMain, getLogPath } from './logger'
+import {
+  ConfigInterface,
+  ReplayInterface,
+  OverlaySourceRule,
+} from '../constants/types'
+
+/** Pull the first WxH resolution out of an ffmpeg stderr dump. */
+const parseVideoDimensions = (
+  stderr: string,
+): { width: number; height: number } | null => {
+  const m = stderr.match(/Video:.*?[, ](\d{2,5})x(\d{2,5})/)
+  if (!m) return null
+  return { width: parseInt(m[1], 10), height: parseInt(m[2], 10) }
+}
+
+export type VideoWorkerStatus = {
+  replayPath: string
+  phase: 'idle' | 'recording' | 'encoding'
+  replayIndex: number
+}
+
+export type VideoJobController = {
+  stop: () => void
+  cancel: () => void
+  promise: Promise<void>
+  getWorkerStatus: () => VideoWorkerStatus[]
+}
+
+type VideoSignal = {
+  stopped: boolean
+  cancelled: boolean
+  activeProcesses: Set<ChildProcess>
+}
+
+let ffmpegPath = getFFMPEGPath()
+logMain('slpToVideo: resolved ffmpeg path', { ffmpegPath })
+
+export function setFFMPEGPathOverride(overridePath: string) {
+  if (overridePath && overridePath.trim()) {
+    ffmpegPath = overridePath.trim()
+    logMain('slpToVideo: ffmpeg path overridden', { ffmpegPath })
+  } else {
+    ffmpegPath = getFFMPEGPath()
+    logMain('slpToVideo: ffmpeg path reset to default', { ffmpegPath })
+  }
+}
+
+const getAppDataPath = () => {
+  if (app && typeof app.getPath === 'function') return app.getPath('appData')
+  const platform = os.type()
+  if (platform === 'Windows_NT') {
+    return process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming')
+  }
+  if (platform === 'Darwin') {
+    return path.join(os.homedir(), 'Library', 'Application Support')
+  }
+  return process.env.XDG_CONFIG_HOME || path.join(os.homedir(), '.config')
+}
+
+// --- Robustness knobs for the recording pipeline (watchdog + Stop below).
+// Tuned to kill genuine hangs quickly without false-positiving healthy work.
+//
+// The two Dolphin timers are LENGTH-INDEPENDENT on purpose: the stale timer
+// measures the gap BETWEEN frames, not total runtime, so a 3-minute game (which
+// streams [CURRENT_FRAME] continuously) keeps resetting it and never trips —
+// only genuine silence does. Boot grace is about ISO load, also length-agnostic.
+const DOLPHIN_BOOT_STALE_MS = 90_000 // no first frame within 90s of spawn = hung boot
+const DOLPHIN_FRAME_STALE_MS = 30_000 // frames stopped for 30s mid-record = frozen
+const SIGKILL_ESCALATION_MS = 5_000 // POSIX: SIGTERM, then SIGKILL after 5s
+const STOP_GRACE_MS = 45_000 // Stop: force-kill anything still alive after 45s
+
+// The ffmpeg steps (merge + mp4 convert) RE-ENCODE, so their runtime scales with
+// clip length — a fixed cap would false-kill a legit long game. Scale the timeout
+// off the clip's footage seconds instead, with a generous ~10x-realtime headroom
+// so even a slow machine never trips it; it's only a backstop against a truly
+// wedged process, not a performance budget. e.g. 7s clip → ~3 min, 3-min game →
+// ~32 min. Frames are 60fps.
+const FFMPEG_TIMEOUT_BASE_MS = 120_000 // fixed startup/overhead allowance
+const FFMPEG_TIMEOUT_PER_SEC_MS = 10_000 // + per second of footage (10x realtime)
+const ffmpegTimeoutFor = (clipFrames: number) =>
+  FFMPEG_TIMEOUT_BASE_MS +
+  Math.max(0, clipFrames / 60) * FFMPEG_TIMEOUT_PER_SEC_MS
+
+// Video-encoder args for the SINGLE final re-encode of Dolphin's lossless FFV1
+// dump. Recording used to re-encode twice (FFV1 → mpeg4 at merge → H.264), so
+// the mpeg4 middle hop threw away quality the final encode couldn't recover.
+// Now the merge is a lossless stream-copy and this is the only lossy step.
+// Defaults preserve the classic libx264 + target-bitrate behavior.
+const buildVideoEncodeArgs = (config: ConfigInterface): string[] => {
+  const codec = config.videoCodec === 'h265' ? 'libx265' : 'libx264'
+  const args = ['-c:v', codec, '-preset', config.videoPreset || 'medium']
+  // hvc1 tag so HEVC .mp4s play in QuickTime / Apple ecosystems.
+  if (codec === 'libx265') args.push('-tag:v', 'hvc1')
+  if (config.videoQualityMode === 'crf') {
+    const crf = Number.isFinite(config.crf as number) ? config.crf : 18
+    args.push('-crf', String(crf))
+  } else {
+    args.push('-b:v', `${config.bitrateKbps}k`)
+  }
+  return args
+}
+
+// The scale filter for the final encode. 2x-widescreen normalizes to 1080p (the
+// legacy behavior that used to live in the merge step); everything else keeps
+// the native internal-resolution dims, rounded to even numbers so H.264/H.265
+// accept them.
+const wantsWidescreen1080 = (config: ConfigInterface): boolean =>
+  config.resolution === 4 && config.widescreen !== false
+const buildScaleExpr = (config: ConfigInterface): string =>
+  wantsWidescreen1080(config)
+    ? 'scale=1920:1080'
+    : 'scale=trunc(iw/2)*2:trunc(ih/2)*2'
+
+// Custom/HD texture packs to install into a render profile. The bundled
+// "Definitive Melee HD" pack (assets/Melee_HD_Textures/GALE01) is included when
+// hdTexturesEnabled; user-imported packs are included when their toggle is on.
+type ResolvedTexturePack = { id: string; path: string }
+const resolveEnabledTexturePacks = (
+  config: ConfigInterface,
+): ResolvedTexturePack[] => {
+  const packs: ResolvedTexturePack[] = []
+  if (config.hdTexturesEnabled) {
+    packs.push({
+      id: 'melee-hd',
+      path: getAssetPath('Melee_HD_Textures', 'GALE01'),
+    })
+  }
+  for (const p of config.texturePacks || []) {
+    if (p.enabled && p.path) packs.push({ id: p.id, path: p.path })
+  }
+  return packs
+}
+
+// Symlink each enabled texture pack into <profile>/Load/Textures/GALE01/<id>.
+// Dolphin scans that folder recursively, so a pack's internal nesting doesn't
+// matter. Symlinks (junctions on Windows — no admin needed) avoid copying
+// hundreds of MB per worker; deleting the temp profile removes only the links,
+// never the real packs.
+const installTexturePacks = async (
+  userDir: string,
+  packs: ResolvedTexturePack[],
+): Promise<void> => {
+  if (packs.length === 0) return
+  const dest = path.join(userDir, 'Load', 'Textures', 'GALE01')
+  await fsPromises.mkdir(dest, { recursive: true })
+  const linkType = process.platform === 'win32' ? 'junction' : 'dir'
+  await Promise.all(
+    packs.map((pack) =>
+      fsPromises
+        .symlink(pack.path, path.join(dest, pack.id), linkType)
+        .catch((err) =>
+          logMain('record: texture pack symlink failed', {
+            pack: pack.id,
+            err: String(err),
+          }),
+        ),
+    ),
+  )
+}
+
+// Await a child's exit. CRITICAL: also settle on 'error' — a spawn that fails
+// (ENOENT, EAGAIN/EMFILE/ENOMEM after spawning thousands of processes across an
+// all-night run) emits 'error' and may never emit 'exit', which would otherwise
+// park the awaiting worker forever. Both paths funnel through one resolve.
+const exit = (process: ChildProcess) =>
+  new Promise<number | null>((resolve) => {
+    let settled = false
+    const done = (code: number | null) => {
+      if (settled) return
+      settled = true
+      resolve(code)
+    }
+    process.on('exit', (code) => done(code))
+    process.on('error', () => done(null))
+  })
+
+// Return true once the process has actually terminated (not merely been sent a
+// signal — proc.killed only means "a signal was delivered").
+const isDead = (proc: ChildProcess) =>
+  !proc ||
+  proc.pid == null ||
+  proc.exitCode !== null ||
+  proc.signalCode !== null
+
+// Forcefully terminate a process AND its children, cross-platform. Windows has
+// no real signals (kill() maps to TerminateProcess and won't reap children, and
+// Dolphin can spawn helpers) so we use `taskkill /T /F` to take down the whole
+// tree. On POSIX we SIGTERM, then escalate to SIGKILL if it's still alive. Used
+// by the stale watchdog, Stop's backstop, and Cancel — the force paths. The
+// normal per-clip end-frame stop still uses a plain proc.kill() (below).
+const killTree = (proc: ChildProcess) => {
+  if (isDead(proc)) return
+  const { pid } = proc
+  if (process.platform === 'win32') {
+    try {
+      spawn('taskkill', ['/pid', String(pid), '/T', '/F'], { stdio: 'ignore' })
+    } catch {
+      try {
+        proc.kill()
+      } catch {
+        /* already gone */
+      }
+    }
+    return
+  }
+  try {
+    proc.kill('SIGTERM')
+  } catch {
+    /* already gone */
+  }
+  setTimeout(() => {
+    if (!isDead(proc)) {
+      try {
+        proc.kill('SIGKILL')
+      } catch {
+        /* already gone */
+      }
+    }
+  }, SIGKILL_ESCALATION_MS)
+}
+
+// Await a child's exit, but give up after `timeoutMs` — a wedged ffmpeg (e.g.
+// fed a truncated dump from a killed Dolphin) must never park a worker forever.
+// Returns the exit code, or null on timeout (after force-killing the process).
+const awaitExitWithTimeout = async (
+  proc: ChildProcess,
+  timeoutMs: number,
+  label: string,
+): Promise<number | null> => {
+  let timer: ReturnType<typeof setTimeout> | null = null
+  const timeout = new Promise<number | null>((resolve) => {
+    timer = setTimeout(() => {
+      logMain(`record: ${label} timed out after ${timeoutMs}ms — killing`)
+      killTree(proc)
+      resolve(null)
+    }, timeoutMs)
+  })
+  const code = await Promise.race([exit(proc), timeout])
+  if (timer) clearTimeout(timer)
+  return code
+}
+
+// Watch a recording Dolphin: kill it when it reaches the target end frame (the
+// normal per-clip stop), and — the missing safety net — kill it if it FREEZES.
+// A Dolphin that hangs on load (never emits a frame) or stalls mid-record (frames
+// stop arriving) would otherwise hold a worker slot forever, since it never
+// reaches its end frame and never exits. Mirrors the playback path's stale timer,
+// with a longer boot grace so a slow ISO load isn't mistaken for a hang. Returns
+// a cleanup fn to clear the timer once the process has exited.
+const monitorDolphinRecording = (
+  proc: ChildProcessWithoutNullStreams,
+  onStale: (_sawAnyFrame: boolean) => void,
+) => {
+  let endFrame = Infinity
+  let sawAnyFrame = false
+  let staleTimer: ReturnType<typeof setTimeout> | null = null
+  const clearStale = () => {
+    if (staleTimer) {
+      clearTimeout(staleTimer)
+      staleTimer = null
+    }
+  }
+  const armStale = () => {
+    clearStale()
+    staleTimer = setTimeout(
+      () => {
+        onStale(sawAnyFrame)
+        killTree(proc)
+      },
+      sawAnyFrame ? DOLPHIN_FRAME_STALE_MS : DOLPHIN_BOOT_STALE_MS,
+    )
+  }
+  const rl = readline.createInterface({ input: proc.stdout })
+  rl.on('line', (line) => {
+    if (line.includes('[PLAYBACK_END_FRAME]')) {
+      const match = /\[PLAYBACK_END_FRAME\] ([0-9]+)/.exec(line)
+      if (match?.[1]) endFrame = Math.min(endFrame, parseInt(match[1], 10))
+    } else if (line.includes('[GAME_END_FRAME]')) {
+      const match = /\[GAME_END_FRAME\] ([0-9]+)/.exec(line)
+      if (match?.[1]) endFrame = Math.min(endFrame, parseInt(match[1], 10))
+    } else if (line.includes('[CURRENT_FRAME]')) {
+      sawAnyFrame = true
+      armStale()
+      if (
+        endFrame !== Infinity &&
+        line.includes(`[CURRENT_FRAME] ${endFrame}`)
+      ) {
+        proc.kill() // reached the end normally — gentle stop is enough
+      }
+    }
+  })
+  armStale() // start the boot-grace clock immediately
+  return () => {
+    clearStale()
+    rl.close()
+  }
+}
+
+/**
+ * Resolve a filename pattern using replay metadata.
+ * Supports {character1}, {character2}, {player1}, {player2}, {stage},
+ * {date}, {time}, {index}, {kills}, {damage}, {moves}.
+ * Slashes in the pattern create subdirectories.
+ */
+export const resolveFilenamePattern = (
+  pattern: string,
+  replay: ReplayInterface,
+  sourceRules?: OverlaySourceRule[],
+): string => {
+  const unsafeChars = /[<>:"/\\|?*\x00-\x1f]/g // eslint-disable-line no-control-regex
+  const sanitize = (s: string) => s.replace(unsafeChars, '_').trim()
+
+  // Shared token values (raw), sanitised here for filesystem safety. The
+  // pattern's own '/' separators are preserved to allow folder structure.
+  const raw = buildReplayVars(replay, sourceRules)
+  const vars: Record<string, string> = {}
+  for (const key of Object.keys(raw)) vars[key] = sanitize(raw[key])
+
+  return pattern.replace(/\{(\w+)\}/g, (match, key) => vars[key] ?? match)
+}
+
+const processOneReplay = async (
+  replay: ReplayInterface,
+  config: ConfigInterface & { numProcesses: number; gameMusicOn: boolean },
+  // Throwaway per-worker Dolphin profile (`--user`), built once per worker in
+  // processReplays. Every Dolphin spawn in this run is isolated to it, so the
+  // user's real Slippi profile is never read or written during recording.
+  userDir: string,
+  signal: VideoSignal,
+  onRecorded?: () => void,
+  onError?: (_msg: string) => void,
+): Promise<boolean> => {
+  const outputPattern = config.outputFilenamePattern || '{index}'
+  const resolvedName = resolveFilenamePattern(
+    outputPattern,
+    replay,
+    config.overlaySourceRules,
+  )
+  // resolvedName may contain path separators for folder structure
+  const outputDir = path.resolve(config.outputPath, path.dirname(resolvedName))
+  const fileBasename = path.basename(resolvedName)
+
+  // Ensure output subdirectories exist
+  await fsPromises.mkdir(outputDir, { recursive: true })
+
+  const basePath = (suffix: string) =>
+    path.resolve(outputDir, `${fileBasename}${suffix}`)
+
+  // Overlay PNG path, set later if an overlay is rendered. Declared here so the
+  // cleanup helper can always reach it regardless of which path we exit through.
+  let overlayPngPath: string | null = null
+
+  // Remove every non-final scratch file for this clip. Never touches the final
+  // `.mp4`/`.avi`. Called on success AND on every failure/stop exit so a long
+  // run with retries doesn't slowly litter the output folder with -unmerged/
+  // -merged debris.
+  const cleanupIntermediates = () =>
+    Promise.all([
+      fsPromises.unlink(basePath('.json')).catch(() => {}),
+      fsPromises.unlink(basePath('-unmerged.avi')).catch(() => {}),
+      fsPromises.unlink(basePath('-unmerged.wav')).catch(() => {}),
+      fsPromises.unlink(basePath('-merged.avi')).catch(() => {}),
+      // Lossless FFV1 intermediate — unless kept as a `.master.avi` (already
+      // renamed away by then, so this unlink is a no-op in that case).
+      fsPromises.unlink(basePath('-lossless.avi')).catch(() => {}),
+      fsPromises.unlink(basePath('-final.avi')).catch(() => {}),
+      ...(overlayPngPath
+        ? [fsPromises.unlink(overlayPngPath).catch(() => {})]
+        : []),
+    ])
+
+  // 1. Write JSON config for this replay
+  // Check file exists before trying to parse
+  try {
+    await fsPromises.access(replay.path)
+  } catch {
+    logMain('record: replay file not found', { path: replay.path })
+    onError?.(`Error: Replay file not found: ${replay.path}`)
+    return false
+  }
+
+  let game
+  try {
+    game = new SlippiGame(replay.path)
+  } catch (e) {
+    logMain('record: broken/unreadable replay file', { path: replay.path })
+    onError?.(`Error: Could not read replay: ${replay.path}`)
+    return false
+  }
+
+  const metadata = game.getMetadata()
+  const gameLastFrame = metadata?.lastFrame ?? game.getLatestFrame()?.frame
+
+  let endFrame: number
+  if (gameLastFrame) {
+    endFrame =
+      replay.endFrame > 0
+        ? Math.min(replay.endFrame, gameLastFrame - 1)
+        : gameLastFrame - 1
+  } else if (replay.endFrame > 0) {
+    endFrame = replay.endFrame
+  } else {
+    logMain('record: cannot determine game length', { path: replay.path })
+    onError?.(`Error: Cannot determine game length: ${replay.path}`)
+    return false
+  }
+
+  const dolphinConfig = {
+    mode: 'normal',
+    replay: replay.path,
+    startFrame:
+      replay.startFrame - 60 < GAME_START_FRAME
+        ? GAME_START_FRAME
+        : replay.startFrame - 60,
+    endFrame,
+    isRealTimeMode: false,
+    commandId: `${crypto.randomBytes(12).toString('hex')}`,
+  }
+  await fsPromises.writeFile(basePath('.json'), JSON.stringify(dolphinConfig))
+
+  // Footage length in frames (60fps) — drives the length-scaled ffmpeg timeouts
+  // so a long game's re-encode isn't false-killed. Includes the 60-frame lead-in.
+  const clipFrames = Math.max(1, endFrame - dolphinConfig.startFrame)
+  const ffmpegTimeoutMs = ffmpegTimeoutFor(clipFrames)
+
+  // 2. Record with Dolphin, isolated to this worker's throwaway --user profile.
+  // (No more leftover-dump-file cleanup: dumps land under `userDir` and that
+  // whole dir is deleted when the run ends, so a stale dtkdump.wav can never
+  // prompt on a later playback — the bug that cleanup existed to paper over.)
+  const dolphinArgs = [
+    '-i',
+    basePath('.json'),
+    '-o',
+    `${fileBasename}-unmerged`,
+    `--output-directory=${outputDir}`,
+    ...(config.fullscreen !== false ? ['-b'] : []),
+    '-e',
+    config.ssbmIsoPath,
+    '--user',
+    userDir,
+    '--cout',
+  ]
+
+  logMain('record: spawning Dolphin', {
+    dolphinPath: config.dolphinPath,
+    args: dolphinArgs,
+    replay: replay.path,
+    startFrame: dolphinConfig.startFrame,
+    endFrame: dolphinConfig.endFrame,
+  })
+
+  const dolphinProcess = spawn(config.dolphinPath, dolphinArgs, {})
+  signal.activeProcesses.add(dolphinProcess)
+
+  let dolphinStderr = ''
+  dolphinProcess.stderr.setEncoding('utf8')
+  dolphinProcess.stderr.on('data', (chunk: string) => {
+    dolphinStderr += chunk
+  })
+  dolphinProcess.on('error', (err) => {
+    logMain('record: Dolphin spawn error', err)
+  })
+
+  const dolphinExit = exit(dolphinProcess)
+  let staleKill = false
+  const stopMonitor = monitorDolphinRecording(dolphinProcess, (sawAnyFrame) => {
+    staleKill = true
+    logMain('record: Dolphin watchdog killed a frozen recording', {
+      replay: replay.path,
+      reason: sawAnyFrame
+        ? 'frames stopped mid-record'
+        : 'no frames within boot grace',
+    })
+  })
+  const dolphinExitCode = await dolphinExit
+  stopMonitor()
+  signal.activeProcesses.delete(dolphinProcess)
+
+  logMain('record: Dolphin exited', {
+    code: dolphinExitCode,
+    staleKill,
+    stderr: dolphinStderr.slice(-2000),
+    replay: replay.path,
+  })
+
+  if (signal.stopped || signal.cancelled) {
+    await cleanupIntermediates()
+    return false
+  }
+
+  // Recording must have produced a non-empty video dump. If it didn't — a spawn
+  // 'error', a crash, or a watchdog kill of a frozen Dolphin — treat the clip as
+  // failed (retried/counted below) rather than feeding a missing/partial input
+  // into ffmpeg and silently emitting nothing. This is also what keeps the usage
+  // telemetry honest: only clips that actually recorded advance the counter.
+  try {
+    const dump = await fsPromises.stat(basePath('-unmerged.avi'))
+    if (dump.size === 0) throw new Error('empty dump')
+  } catch {
+    logMain('record: no video dump produced', {
+      code: dolphinExitCode,
+      staleKill,
+      replay: replay.path,
+      stderr: dolphinStderr.slice(-500),
+    })
+    onError?.(
+      `Error: recording produced no video: ${path.basename(replay.path)}`,
+    )
+    await cleanupIntermediates()
+    return false
+  }
+
+  onRecorded?.()
+
+  // 3. Merge video and audio with ffmpeg — LOSSLESS stream-copy (mux only).
+  // No re-encode here: the FFV1 dump is copied straight through, so quality is
+  // preserved for the single final encode below. (Any scaling / bitrate now
+  // happens once, at the final encode.)
+  const ffmpegMergeArgs = [
+    '-i',
+    basePath('-unmerged.avi'),
+    '-i',
+    basePath('-unmerged.wav'),
+    '-c:v',
+    'copy',
+    '-c:a',
+    'copy',
+    basePath('-merged.avi'),
+  ]
+
+  logMain('record: spawning ffmpeg merge', {
+    ffmpegPath,
+    args: ffmpegMergeArgs,
+  })
+
+  const mergeProcess = spawn(ffmpegPath, ffmpegMergeArgs, {
+    stdio: ['ignore', 'ignore', 'pipe'],
+  })
+  signal.activeProcesses.add(mergeProcess)
+  mergeProcess.on('error', (err) => {
+    logMain('record: ffmpeg merge spawn error', err)
+  })
+  let mergeStderr = ''
+  mergeProcess.stderr!.on('data', (chunk: Buffer) => {
+    mergeStderr += chunk.toString()
+  })
+  const mergeCode = await awaitExitWithTimeout(
+    mergeProcess,
+    ffmpegTimeoutMs,
+    'ffmpeg merge',
+  )
+  signal.activeProcesses.delete(mergeProcess)
+  if (mergeCode !== 0) {
+    logMain(`record: ffmpeg merge failed (code ${mergeCode})`, {
+      stderr: mergeStderr.slice(-2000),
+    })
+  }
+
+  if (signal.stopped || signal.cancelled) {
+    await cleanupIntermediates()
+    return false
+  }
+
+  // 4. Trim buffer frames — still a lossless stream-copy of the FFV1, into the
+  // lossless intermediate that the single final encode (below) reads from.
+  const ffmpegTrimArgs = [
+    '-ss',
+    '1',
+    '-i',
+    basePath('-merged.avi'),
+    '-c',
+    'copy',
+    basePath('-lossless.avi'),
+  ]
+
+  logMain('record: spawning ffmpeg trim', { args: ffmpegTrimArgs })
+
+  const trimProcess = spawn(ffmpegPath, ffmpegTrimArgs, {
+    stdio: ['ignore', 'ignore', 'pipe'],
+  })
+  signal.activeProcesses.add(trimProcess)
+  trimProcess.on('error', (err) => {
+    logMain('record: ffmpeg trim spawn error', err)
+  })
+  let trimStderr = ''
+  trimProcess.stderr!.on('data', (chunk: Buffer) => {
+    trimStderr += chunk.toString()
+  })
+  const trimCode = await awaitExitWithTimeout(
+    trimProcess,
+    ffmpegTimeoutMs,
+    'ffmpeg trim',
+  )
+  signal.activeProcesses.delete(trimProcess)
+  if (trimCode !== 0) {
+    logMain(`record: ffmpeg trim failed (code ${trimCode})`, {
+      stderr: trimStderr.slice(-2000),
+    })
+  }
+
+  if (signal.stopped || signal.cancelled) {
+    await cleanupIntermediates()
+    return false
+  }
+
+  // 4b. Build the overlay PNG (optional). Rendered at the FINAL output resolution
+  // — 1080p for the 2x-widescreen preset, else the native internal-res dims from
+  // ffmpeg's stderr — so composited text stays crisp after the single final encode.
+  const normalizeTo1080 = wantsWidescreen1080(config)
+  if (config.overlayEnabled) {
+    const vars = buildReplayVars(replay, config.overlaySourceRules)
+    const overlayText = applyPattern(config.overlayPattern || '', vars).trim()
+    const dims = normalizeTo1080
+      ? { width: 1920, height: 1080 }
+      : parseVideoDimensions(trimStderr)
+    if (overlayText && dims) {
+      const pngPath = basePath('-overlay.png')
+      try {
+        const ok = await renderOverlayPng(
+          overlayText,
+          dims.width,
+          dims.height,
+          config.overlayPosition || 'bottom-left',
+          pngPath,
+        )
+        if (ok) overlayPngPath = pngPath
+      } catch (err) {
+        logMain('record: overlay render failed', err)
+      }
+    } else {
+      logMain('record: overlay skipped', {
+        hasText: Boolean(overlayText),
+        dims,
+      })
+    }
+  }
+
+  // Overlay compositing filter. When normalizing to 1080p, scale the base there
+  // first so the (1080p) overlay lines up 1:1; otherwise scale the overlay to the
+  // base. Always pad to even dims for H.264/H.265.
+  const overlayFilter = normalizeTo1080
+    ? '[0:v]scale=1920:1080[b];[b][1:v]scale2ref[base][ovr];' +
+      '[base][ovr]overlay=0:0,pad=ceil(iw/2)*2:ceil(ih/2)*2[outv]'
+    : '[0:v][1:v]scale2ref[base][ovr];' +
+      '[base][ovr]overlay=0:0,pad=ceil(iw/2)*2:ceil(ih/2)*2[outv]'
+
+  if (signal.stopped || signal.cancelled) {
+    await cleanupIntermediates()
+    return false
+  }
+
+  // 5. Final encode — the SINGLE lossy step, from the lossless FFV1 intermediate,
+  // using the configured codec / quality (buildVideoEncodeArgs). Overlay is
+  // composited here in the same pass; scaling happens here too (buildScaleExpr).
+  const encodeArgs = buildVideoEncodeArgs(config)
+  const losslessInput = basePath('-lossless.avi')
+  if (config.convertToMp4) {
+    const mp4Args = overlayPngPath
+      ? [
+          '-i',
+          losslessInput,
+          '-i',
+          overlayPngPath,
+          '-filter_complex',
+          overlayFilter,
+          '-map',
+          '[outv]',
+          '-map',
+          '0:a?',
+          ...encodeArgs,
+          '-c:a',
+          'aac',
+          '-b:a',
+          '128k',
+          basePath('.mp4'),
+        ]
+      : [
+          '-i',
+          losslessInput,
+          '-vf',
+          buildScaleExpr(config),
+          ...encodeArgs,
+          '-c:a',
+          'aac',
+          '-b:a',
+          '128k',
+          basePath('.mp4'),
+        ]
+    logMain('record: spawning ffmpeg mp4 encode', { args: mp4Args })
+
+    const mp4Process = spawn(ffmpegPath, mp4Args, {
+      stdio: ['ignore', 'ignore', 'pipe'],
+    })
+    signal.activeProcesses.add(mp4Process)
+    mp4Process.on('error', (err) => {
+      logMain('record: ffmpeg mp4 encode spawn error', err)
+    })
+    let mp4Stderr = ''
+    mp4Process.stderr!.on('data', (chunk: Buffer) => {
+      mp4Stderr += chunk.toString()
+    })
+    const mp4Code = await awaitExitWithTimeout(
+      mp4Process,
+      ffmpegTimeoutMs,
+      'ffmpeg mp4 encode',
+    )
+    signal.activeProcesses.delete(mp4Process)
+    if (mp4Code !== 0) {
+      logMain(`record: ffmpeg mp4 encode failed (code ${mp4Code})`, {
+        stderr: mp4Stderr.slice(-2000),
+      })
+    }
+  } else {
+    // AVI output: re-encode the lossless intermediate to the chosen codec (with
+    // the overlay composited if present) into the final .avi.
+    const aviOut = basePath('-final.avi')
+    const aviArgs = overlayPngPath
+      ? [
+          '-i',
+          losslessInput,
+          '-i',
+          overlayPngPath,
+          '-filter_complex',
+          overlayFilter,
+          '-map',
+          '[outv]',
+          '-map',
+          '0:a?',
+          ...encodeArgs,
+          '-c:a',
+          'copy',
+          aviOut,
+        ]
+      : [
+          '-i',
+          losslessInput,
+          '-vf',
+          buildScaleExpr(config),
+          ...encodeArgs,
+          '-c:a',
+          'copy',
+          aviOut,
+        ]
+    logMain('record: spawning ffmpeg avi encode', { args: aviArgs })
+
+    const aviProcess = spawn(ffmpegPath, aviArgs, {
+      stdio: ['ignore', 'ignore', 'pipe'],
+    })
+    signal.activeProcesses.add(aviProcess)
+    aviProcess.on('error', (err) => {
+      logMain('record: ffmpeg avi encode spawn error', err)
+    })
+    let aviStderr = ''
+    aviProcess.stderr!.on('data', (chunk: Buffer) => {
+      aviStderr += chunk.toString()
+    })
+    const aviCode = await awaitExitWithTimeout(
+      aviProcess,
+      ffmpegTimeoutMs,
+      'ffmpeg avi encode',
+    )
+    signal.activeProcesses.delete(aviProcess)
+    if (aviCode === 0) {
+      await fsPromises.rename(aviOut, basePath('.avi')).catch((err) => {
+        logMain('record: avi encode rename failed', err)
+      })
+    } else {
+      logMain(`record: ffmpeg avi encode failed (code ${aviCode})`, {
+        stderr: aviStderr.slice(-2000),
+      })
+      await fsPromises.unlink(aviOut).catch(() => {})
+    }
+  }
+
+  // Keep the lossless FFV1 master next to the output if requested (pristine
+  // source for editing/archival); otherwise cleanupIntermediates deletes it.
+  if (config.keepLosslessMaster) {
+    await fsPromises
+      .rename(losslessInput, basePath('.master.avi'))
+      .catch((err) =>
+        logMain('record: keep-lossless-master rename failed', err),
+      )
+  }
+
+  // 6. Delete intermediates
+  await cleanupIntermediates()
+
+  // 7. Validate the final output actually exists and is non-empty. An ffmpeg
+  // step can fail (or time out) yet leave a 0-byte or missing final file; without
+  // this check that clip was counted as a success, inflating the usage stats and
+  // producing the "holes" seen when forensically recounting a run. A real output
+  // is the only thing that returns true.
+  const finalOutput = config.convertToMp4 ? basePath('.mp4') : basePath('.avi')
+  try {
+    const st = await fsPromises.stat(finalOutput)
+    if (st.size === 0) throw new Error('empty output')
+  } catch {
+    logMain('record: final output missing or empty', {
+      finalOutput,
+      replay: replay.path,
+    })
+    onError?.(
+      `Error: clip produced no output file: ${path.basename(replay.path)}`,
+    )
+    await fsPromises.unlink(finalOutput).catch(() => {})
+    return false
+  }
+
+  return true
+}
+
+const processReplays = async (
+  replays: ReplayInterface[],
+  config: ConfigInterface & { numProcesses: number; gameMusicOn: boolean },
+  eventEmitter: (_msg: string) => void,
+  signal: VideoSignal,
+  workerStatuses: VideoWorkerStatus[],
+  onClipEncoded?: (_replay: ReplayInterface) => void,
+  onClipFailed?: (_replay: ReplayInterface) => void,
+) => {
+  const queue = [...replays]
+  const total = replays.length
+  const progress = { recorded: 0, encoded: 0 }
+  // Clips that failed every attempt (not stop/cancel) — surfaced to the user and
+  // written to failures.json so a run that silently drops clips is visible.
+  const failures: ReplayInterface[] = []
+
+  const emitStatus = () => {
+    if (progress.recorded < total) {
+      eventEmitter(`recording ${progress.recorded}/${total}`)
+    } else {
+      eventEmitter(`encoding ${progress.encoded}/${total}`)
+    }
+  }
+  emitStatus()
+
+  const onRecorded = () => {
+    progress.recorded += 1
+    emitStatus()
+  }
+  // One throwaway Dolphin `--user` profile per worker (see buildWorkerProfile),
+  // indexed by workerIndex. Populated before the workers start, deleted in the
+  // finally below — recording never touches the user's real Slippi profile.
+  const workerProfiles: string[] = []
+
+  const MAX_ATTEMPTS = 2 // one retry on a genuine failure
+  const worker = async (workerIndex: number) => {
+    let replay = queue.shift()
+    while (replay !== undefined) {
+      if (signal.stopped || signal.cancelled) break
+
+      // A failed clip after recording (e.g. merge error) already bumped the
+      // recorded counter; guard so a retry that re-records doesn't count twice.
+      let recordedCounted = false
+      const onRecordedOnce = () => {
+        workerStatuses[workerIndex].phase = 'encoding'
+        if (!recordedCounted) {
+          recordedCounted = true
+          onRecorded()
+        }
+      }
+
+      let ok = false
+      for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+        if (signal.stopped || signal.cancelled) break
+        workerStatuses[workerIndex] = {
+          replayPath: replay.path,
+          phase: 'recording',
+          replayIndex: replay.index,
+        }
+        // eslint-disable-next-line no-await-in-loop
+        ok = await processOneReplay(
+          replay,
+          config,
+          workerProfiles[workerIndex],
+          signal,
+          onRecordedOnce,
+          eventEmitter,
+        )
+        if (ok || signal.stopped || signal.cancelled) break
+        logMain('record: clip failed, retrying', {
+          replay: replay.path,
+          attempt,
+        })
+      }
+
+      if (!ok && (signal.stopped || signal.cancelled)) break
+      if (ok) {
+        progress.encoded += 1
+        emitStatus()
+        onClipEncoded?.(replay)
+      } else {
+        // Exhausted retries without a Stop/Cancel — a real failure.
+        failures.push(replay)
+        onClipFailed?.(replay)
+      }
+      workerStatuses[workerIndex] = {
+        replayPath: '',
+        phase: 'idle',
+        replayIndex: -1,
+      }
+      replay = queue.shift()
+    }
+  }
+
+  // Build the per-worker profiles up front, run, then delete them in the
+  // finally so an error/stop can never leave temp profiles behind.
+  try {
+    eventEmitter('Preparing Dolphin...')
+    for (let i = 0; i < config.numProcesses; i++) {
+      // eslint-disable-next-line no-await-in-loop
+      const dir = await fsPromises.mkdtemp(
+        path.join(os.tmpdir(), 'lmclip-dolphin-'),
+      )
+      // eslint-disable-next-line no-await-in-loop
+      await buildWorkerProfile(config, dir)
+      workerProfiles.push(dir)
+    }
+
+    const workers = []
+    for (let i = 0; i < config.numProcesses; i++) workers.push(worker(i))
+    await Promise.all(workers)
+  } finally {
+    await Promise.all(
+      workerProfiles.map((d) =>
+        fsPromises.rm(d, { recursive: true, force: true }).catch(() => {}),
+      ),
+    )
+  }
+
+  // Persist a manifest of failed clips so they can be inspected or re-run later.
+  if (failures.length > 0) {
+    logMain(`record: ${failures.length} clip(s) failed`, {
+      count: failures.length,
+    })
+    await fsPromises
+      .writeFile(
+        path.resolve(config.outputPath, 'failures.json'),
+        JSON.stringify(
+          failures.map((r) => ({
+            index: r.index,
+            path: r.path,
+            startFrame: r.startFrame,
+            endFrame: r.endFrame,
+          })),
+          null,
+          2,
+        ),
+      )
+      .catch(() => {})
+  }
+
+  // Concatenate the finished clips into a single video. Runs on a normal finish
+  // AND on Stop — Stop means "keep completed clips": it lets the in-flight clip
+  // finish and kills nothing, so every per-clip final on disk is complete and
+  // safe to concat (partial `-unmerged`/`-merged` intermediates are filtered out
+  // below regardless). Only Cancel — which kills active processes and can leave a
+  // half-written clip — skips concatenation.
+  if (config.concatenate && !signal.cancelled) {
+    console.log('Concatenating clips...')
+    eventEmitter('Concatenating clips...')
+
+    const ext = config.convertToMp4 ? '.mp4' : '.avi'
+    const outputFiles = (await fsPromises.readdir(config.outputPath))
+      .filter(
+        (f) =>
+          f.endsWith(ext) && !f.includes('-unmerged') && !f.includes('-merged'),
+      )
+      .sort()
+
+    if (outputFiles.length > 1) {
+      const concatListPath = path.resolve(config.outputPath, 'concat_list.txt')
+      const concatLines = outputFiles.map(
+        (f) => `file '${path.resolve(config.outputPath, f)}'`,
+      )
+      await fsPromises.writeFile(concatListPath, concatLines.join('\n'))
+
+      const finalPath = path.resolve(config.outputPath, `final${ext}`)
+      const concatArgs = [
+        '-f',
+        'concat',
+        '-safe',
+        '0',
+        '-i',
+        concatListPath,
+        '-c:v',
+        'copy',
+        '-fflags',
+        '+genpts',
+      ]
+      if (config.convertToMp4) {
+        // MP4 clips already have AAC audio, pure stream copy
+        concatArgs.push('-c:a', 'copy')
+      } else {
+        concatArgs.push(
+          '-b:v',
+          `${config.bitrateKbps}k`,
+          '-af',
+          'aresample=async=1:first_pts=0',
+          '-c:a',
+          'aac',
+          '-b:a',
+          '128k',
+        )
+      }
+      concatArgs.push(finalPath)
+
+      logMain('record: spawning ffmpeg concat', { args: concatArgs })
+
+      const concatProcess = spawn(ffmpegPath, concatArgs, {
+        stdio: ['ignore', 'ignore', 'pipe'],
+      })
+
+      signal.activeProcesses.add(concatProcess)
+      concatProcess.on('error', (err) => {
+        logMain('record: ffmpeg concat spawn error', err)
+      })
+      let concatStderr = ''
+      concatProcess.stderr!.on('data', (chunk: Buffer) => {
+        concatStderr += chunk.toString()
+      })
+      const concatCode = await exit(concatProcess)
+      signal.activeProcesses.delete(concatProcess)
+      if (concatCode !== 0) {
+        logMain(`record: ffmpeg concat failed (code ${concatCode})`, {
+          stderr: concatStderr.slice(-2000),
+        })
+      }
+
+      // Clean up concat list
+      await fsPromises.unlink(concatListPath).catch(() => {})
+    }
+  }
+
+  eventEmitter(
+    failures.length > 0
+      ? `Done — ${failures.length} clip(s) failed (see failures.json) :)`
+      : 'Done :)',
+  )
+  setTimeout(
+    () => {
+      eventEmitter('')
+    },
+    failures.length > 0 ? 6000 : 2000,
+  )
+}
+
+// Resolves the three Dolphin ini paths (game settings, graphics, dolphin)
+// for the active platform.
+const resolveDolphinIniPaths = (config: ConfigInterface) => {
+  // Linux
+  if (os.type() === 'Linux') {
+    const dolphinDirname = path.resolve(getAppDataPath(), 'SlippiPlayback')
+    return {
+      gameSettingsPath: path.join(dolphinDirname, 'GameSettings', 'GALE01.ini'),
+      graphicsSettingsPath: path.join(dolphinDirname, 'Config', 'GFX.ini'),
+      dolphinSettingsPath: path.join(dolphinDirname, 'Config', 'Dolphin.ini'),
+    }
+  }
+  // Windows
+  const dolphinDirname = path.dirname(config.dolphinPath)
+  return {
+    gameSettingsPath: path.join(
+      dolphinDirname,
+      'User',
+      'GameSettings',
+      'GALE01.ini',
+    ),
+    graphicsSettingsPath: path.join(
+      dolphinDirname,
+      'User',
+      'Config',
+      'GFX.ini',
+    ),
+    dolphinSettingsPath: path.join(
+      dolphinDirname,
+      'User',
+      'Config',
+      'Dolphin.ini',
+    ),
+  }
+}
+
+// Builds the GALE01.ini [Gecko] / [Gecko_Enabled] / [Gecko_Disabled] body from
+// the current config. Shared by recording (configureDolphin) and playback so
+// the play window reflects the same rendering toggles as recording.
+const buildGeckoSettings = (config: ConfigInterface): string[] => {
+  // gameMusicOn is injected for recording jobs; fall back to the raw setting
+  // so playback (which passes the plain config) behaves identically.
+  const gameMusicOn =
+    (config as { gameMusicOn?: boolean }).gameMusicOn ?? config.gameMusic
+
+  // Custom gecko codes go in the [Gecko] section as definitions
+  const geckoDefinitions: string[] = []
+  const customGeckoCodes = config.customGeckoCodes || []
+  for (const gc of customGeckoCodes) {
+    if (gc.name && gc.code) {
+      geckoDefinitions.push(`$${gc.name}`)
+      // Each line of the code block is a hex line
+      for (const line of gc.code.split('\n')) {
+        const trimmed = line.trim()
+        if (trimmed) geckoDefinitions.push(trimmed)
+      }
+    }
+  }
+
+  const settings: string[] = ['[Gecko]']
+
+  // Inline definitions for codes not in the playback GALE01r2.ini
+  if (config.freezeFD) {
+    settings.push('$Freeze FD Background')
+    settings.push('0421AAE0 48000008')
+  }
+  if (config.centerHud) {
+    settings.push('$Center Align 2P HUD')
+    settings.push('C216E9AC 00000009')
+    settings.push('887F0061 2C030003')
+    settings.push('41820030 887F0085')
+    settings.push('2C030003 41820024')
+    settings.push('887F00A9 2C030003')
+    settings.push('40820018 887F00CD')
+    settings.push('2C030003 4082000C')
+    settings.push('38600002 4800000C')
+    settings.push('887F0000 5463F77E')
+    settings.push('60000000 00000000')
+  }
+  if (config.flashRedLCancel) {
+    settings.push('$Flash Red Failed L-Cancel A')
+    settings.push('C20C0148 0000000C')
+    settings.push('387F0488 899E0564')
+    settings.push('2C0C00D4 41820008')
+    settings.push('4800004C 39800091')
+    settings.push('999E0564 3D80437F')
+    settings.push('919E0518 3D80C200')
+    settings.push('919E0524 3D800000')
+    settings.push('919E051C 919E0520')
+    settings.push('919E0528 919E052C')
+    settings.push('919E0530 3D80C280')
+    settings.push('919E0534 3D80800C')
+    settings.push('618C0150 7D8903A6')
+    settings.push('4E800420 00000000')
+    settings.push('$Flash Red Failed L-Cancel B')
+    settings.push('C208D690 00000009')
+    settings.push('3D808048 818C9D30')
+    settings.push('558C443E 2C0C0208')
+    settings.push('40820020 818DB61C')
+    settings.push('898C0000 8965000C')
+    settings.push('7C0C5800 4182000C')
+    settings.push('88A5067F 48000018')
+    settings.push('88A5067F 2C050007')
+    settings.push('4180000C 398000D4')
+    settings.push('99830564 00000000')
+  }
+
+  // Write custom code definitions
+  settings.push(...geckoDefinitions)
+
+  settings.push('[Gecko_Enabled]')
+  if (!gameMusicOn) settings.push('$Optional: Game Music OFF')
+  if (config.hideHud) settings.push('$Optional: Hide HUD')
+  if (config.hideTags) settings.push('$Optional: Hide Tags')
+  if (config.fixedCamera) settings.push('$Optional: Fixed Camera Always')
+  if (config.widescreen !== false) settings.push('$Optional: Widescreen 16:9')
+  if (config.disableScreenShake)
+    settings.push('$Optional: Disable Screen Shake')
+  if (config.noElectricSFX) settings.push('$Optional: No Electric SFX')
+  if (config.noCrowdNoise) settings.push('$Optional: Prevent Crowd Noises')
+  if (!config.enableChants)
+    settings.push('$Optional: Prevent Character Crowd Chants')
+  if (config.disableMagnifyingGlass)
+    settings.push('$Optional: Disable Magnifying-glass HUD')
+  if (config.freezeFD) settings.push('$Freeze FD Background')
+  if (config.centerHud) settings.push('$Center Align 2P HUD')
+  if (config.developMode) settings.push('$Optional: Enable Develop Mode')
+  if (config.flashRedLCancel) {
+    settings.push('$Flash Red Failed L-Cancel A')
+    settings.push('$Flash Red Failed L-Cancel B')
+  }
+  // Enable custom gecko codes
+  for (const gc of customGeckoCodes) {
+    if (gc.name && gc.code && gc.enabled) {
+      settings.push(`$${gc.name}`)
+    }
+  }
+
+  settings.push('[Gecko_Disabled]')
+  if (config.hideNames) settings.push('$Optional: Show Player Names')
+  // Codes left in [Gecko_Enabled] when the toggle is off would otherwise keep
+  // whatever the base GALE01r2.ini / a previous job set. Explicitly disable the
+  // optional rendering codes when their toggle is off so they never go stale
+  // (e.g. Hide HUD persisting into the play window after a prior recording).
+  if (!config.hideHud) settings.push('$Optional: Hide HUD')
+  if (!config.hideTags) settings.push('$Optional: Hide Tags')
+  if (!config.fixedCamera) settings.push('$Optional: Fixed Camera Always')
+  if (config.widescreen === false) settings.push('$Optional: Widescreen 16:9')
+  if (!config.disableScreenShake)
+    settings.push('$Optional: Disable Screen Shake')
+  if (!config.noElectricSFX) settings.push('$Optional: No Electric SFX')
+  if (!config.noCrowdNoise) settings.push('$Optional: Prevent Crowd Noises')
+  if (!config.disableMagnifyingGlass)
+    settings.push('$Optional: Disable Magnifying-glass HUD')
+  if (!config.developMode) settings.push('$Optional: Enable Develop Mode')
+  // Disabled custom gecko codes
+  for (const gc of customGeckoCodes) {
+    if (gc.name && gc.code && !gc.enabled) {
+      settings.push(`$${gc.name}`)
+    }
+  }
+
+  return settings
+}
+
+/** Parse "HH:MM:SS.xx" (ffmpeg time/duration) into seconds. */
+const parseFfmpegTime = (m: RegExpMatchArray): number =>
+  parseInt(m[1], 10) * 3600 + parseInt(m[2], 10) * 60 + parseFloat(m[3])
+
+/**
+ * Header info for a concat list. A metadata-only pass — `ffmpeg -i <concat>`
+ * with no output prints the container header to stderr then exits non-zero. We
+ * bundle ffmpeg but not ffprobe, so this is the way in.
+ *
+ * NOTE: the concat demuxer reports `Duration: N/A` (it doesn't sum segment
+ * lengths without reading them all), so `seconds` is usually 0. It DOES report
+ * `bitrate` (from the first segment), which callers pair with the total byte
+ * size to derive a duration — the clips are near-constant-bitrate dumps, so
+ * size ÷ bitrate is a good estimate and stays O(1) regardless of clip count.
+ */
+const probeConcatInfo = (
+  listPath: string,
+): Promise<{ seconds: number; bitrateKbps: number }> =>
+  new Promise((resolve) => {
+    const p = spawn(
+      ffmpegPath,
+      ['-f', 'concat', '-safe', '0', '-i', listPath],
+      {
+        stdio: ['ignore', 'ignore', 'pipe'],
+      },
+    )
+    let err = ''
+    p.stderr?.on('data', (c: Buffer) => {
+      err += c.toString()
+    })
+    p.on('error', () => resolve({ seconds: 0, bitrateKbps: 0 }))
+    p.on('exit', () => {
+      const dm = /Duration:\s*(\d+):(\d\d):(\d\d(?:\.\d+)?)/.exec(err)
+      const bm = /bitrate:\s*(\d+)\s*kb\/s/.exec(err)
+      resolve({
+        seconds: dm ? parseFfmpegTime(dm) : 0,
+        bitrateKbps: bm ? parseInt(bm[1], 10) : 0,
+      })
+    })
+  })
+
+/**
+ * Header info for an ordered list of clip files — the Stitch modal's live
+ * estimate. Writes a throwaway concat list next to the first clip (guaranteed
+ * writable), header-probes it, and cleans up. Returns the reported duration
+ * (usually 0 — see probeConcatInfo) and the source bitrate.
+ */
+export async function probeFilesInfo(
+  files: string[],
+): Promise<{ seconds: number; bitrateKbps: number }> {
+  if (!files || files.length === 0) return { seconds: 0, bitrateKbps: 0 }
+  const listPath = path.resolve(
+    path.dirname(files[0]),
+    `probe_list_${crypto.randomBytes(6).toString('hex')}.txt`,
+  )
+  const lines = files.map((f) => `file '${f.replace(/'/g, "'\\''")}'`)
+  try {
+    await fsPromises.writeFile(listPath, lines.join('\n'))
+    return await probeConcatInfo(listPath)
+  } catch {
+    return { seconds: 0, bitrateKbps: 0 }
+  } finally {
+    await fsPromises.unlink(listPath).catch(() => {})
+  }
+}
+
+/**
+ * Stitch already-rendered clips into one video, in the given order. The
+ * standalone counterpart to the concat step baked into a recording run — used
+ * by the Stitch tool on an existing output folder. Stream-copies video (fast,
+ * lossless); for .avi it re-encodes audio to AAC, mirroring the run path.
+ *
+ * `files` are absolute paths in final order. `onProgress` (optional) reports
+ * 0–100 as ffmpeg works. Resolves { ok } / { ok:false, error } rather than
+ * throwing, so the caller can surface a clean message.
+ */
+export async function concatClips(
+  files: string[],
+  output: string,
+  opts: {
+    convertToMp4: boolean
+    bitrateKbps: number
+    // When set, re-encode the joined video to H.264 at ~`videoKbps` (instead of
+    // stream-copying) so the result is a small, upload-friendly file. The
+    // near-lossless recording dumps shrink dramatically with no visible loss.
+    compress?: boolean
+    videoKbps?: number
+  },
+  onProgress?: (_percent: number) => void,
+): Promise<{ ok: boolean; error?: string }> {
+  if (!files || files.length < 2) {
+    return { ok: false, error: 'Need at least 2 clips to stitch.' }
+  }
+  const listPath = path.resolve(
+    path.dirname(output),
+    `stitch_list_${crypto.randomBytes(6).toString('hex')}.txt`,
+  )
+  // ffmpeg concat demuxer: one `file '…'` line per input. Escape single quotes.
+  const lines = files.map((f) => `file '${f.replace(/'/g, "'\\''")}'`)
+  await fsPromises.writeFile(listPath, lines.join('\n'))
+
+  const args = [
+    '-f',
+    'concat',
+    '-safe',
+    '0',
+    '-i',
+    listPath,
+    '-fflags',
+    '+genpts',
+  ]
+  if (opts.compress) {
+    // Re-encode to a target bitrate so the output size is predictable (what the
+    // modal estimates from) and small enough to upload. Always writes AAC audio.
+    args.push(
+      '-c:v',
+      'libx264',
+      '-b:v',
+      `${opts.videoKbps ?? 4000}k`,
+      '-preset',
+      'medium',
+      '-pix_fmt',
+      'yuv420p',
+      '-af',
+      'aresample=async=1:first_pts=0',
+      '-c:a',
+      'aac',
+      '-b:a',
+      '160k',
+    )
+  } else {
+    args.push('-c:v', 'copy')
+    if (opts.convertToMp4) {
+      args.push('-c:a', 'copy')
+    } else {
+      args.push(
+        '-b:v',
+        `${opts.bitrateKbps}k`,
+        '-af',
+        'aresample=async=1:first_pts=0',
+        '-c:a',
+        'aac',
+        '-b:a',
+        '128k',
+      )
+    }
+  }
+  args.push('-y', output)
+
+  logMain('stitch: spawning ffmpeg concat', { args })
+  try {
+    // Total footage seconds up front, so ffmpeg's stderr `time=` can be turned
+    // into a real %. The concat demuxer usually reports `Duration: N/A`, so when
+    // it does we derive the total from the summed file sizes ÷ the (reported)
+    // bitrate — the same estimate the Stitch modal shows, and accurate for these
+    // near-constant-bitrate clips. 0 → the caller keeps its indeterminate bar.
+    let totalSec = 0
+    if (onProgress) {
+      const info = await probeConcatInfo(listPath)
+      totalSec = info.seconds
+      if (totalSec <= 0 && info.bitrateKbps > 0) {
+        const sizes = await Promise.all(
+          files.map((f) =>
+            fsPromises
+              .stat(f)
+              .then((s) => s.size)
+              .catch(() => 0),
+          ),
+        )
+        const bytes = sizes.reduce((a, b) => a + b, 0)
+        totalSec = (bytes * 8) / (info.bitrateKbps * 1000)
+      }
+      logMain('stitch: estimated total footage', {
+        totalSec: Math.round(totalSec),
+      })
+    }
+    onProgress?.(0)
+
+    const proc = spawn(ffmpegPath, args, {
+      stdio: ['ignore', 'ignore', 'pipe'],
+    })
+    let stderr = ''
+    let lastPct = -1
+    proc.stderr?.on('data', (c: Buffer) => {
+      const s = c.toString()
+      stderr += s
+      if (onProgress && totalSec > 0) {
+        const times = [...s.matchAll(/time=(\d+):(\d\d):(\d\d(?:\.\d+)?)/g)]
+        const last = times[times.length - 1]
+        if (last) {
+          // Cap at 99 while running; the 100 comes only on a clean exit.
+          const pct = Math.min(
+            99,
+            Math.max(0, Math.round((parseFfmpegTime(last) / totalSec) * 100)),
+          )
+          if (pct !== lastPct) {
+            lastPct = pct
+            onProgress(pct)
+          }
+        }
+      }
+    })
+    const code = await exit(proc)
+    if (code !== 0) {
+      logMain(`stitch: ffmpeg concat failed (code ${code})`, {
+        stderr: stderr.slice(-2000),
+      })
+      return { ok: false, error: `ffmpeg exited with code ${code}` }
+    }
+    onProgress?.(100)
+    return { ok: true }
+  } catch (err) {
+    return { ok: false, error: (err as Error)?.message || 'ffmpeg failed' }
+  } finally {
+    await fsPromises.unlink(listPath).catch(() => {})
+  }
+}
+
+// Build a throwaway `--user` profile for one recording worker at `userDir`.
+//
+// Recording used to mutate the user's REAL Slippi profile (dump flags on,
+// aspect ratio, EFB scale, gecko) and never restore it — so afterwards opening
+// Dolphin just to watch a replay inherited our recording rig (framedump +
+// fullscreen), and N concurrent workers raced on that one shared profile.
+// Instead every worker now gets its own temp profile built here: we read the
+// real profile's inis as a base and write the recording-tweaked COPIES under
+// `userDir`, then pass `--user userDir` to Dolphin (processOneReplay). Nothing
+// global is touched and the dir is deleted when the run ends. `Sys/` is NOT
+// copied — Dolphin finds it relative to its own binary (verified on Linux;
+// spike: scratchpad/dolphin-user-spike.js).
+export const buildWorkerProfile = async (
+  config: ConfigInterface,
+  userDir: string,
+): Promise<void> => {
+  const { graphicsSettingsPath, dolphinSettingsPath } =
+    resolveDolphinIniPaths(config)
+
+  const destConfigDir = path.join(userDir, 'Config')
+  const destGameSettingsDir = path.join(userDir, 'GameSettings')
+  await fsPromises.mkdir(destConfigDir, { recursive: true })
+  await fsPromises.mkdir(destGameSettingsDir, { recursive: true })
+
+  // Game settings (gecko codes) — generated fresh from config
+  await fsPromises.writeFile(
+    path.join(destGameSettingsDir, 'GALE01.ini'),
+    buildGeckoSettings(config).join('\n'),
+  )
+
+  // Custom/HD texture packs to symlink in (and whether to flip HiresTextures on).
+  const texturePacks = resolveEnabledTexturePacks(config)
+  const texturesEnabled = texturePacks.length > 0
+
+  // Graphics settings — transform the real GFX.ini into the temp copy
+  let rl = readline.createInterface({
+    input: fs.createReadStream(graphicsSettingsPath),
+    crlfDelay: Infinity,
+  })
+  let newSettings: string[] = []
+  const aspectRatioSetting = config.widescreen !== false ? 6 : 5
+  // eslint-disable-next-line no-restricted-syntax
+  for await (const line of rl) {
+    if (line.startsWith('AspectRatio')) {
+      newSettings.push(`AspectRatio = ${aspectRatioSetting}`)
+    } else if (line.startsWith('InternalResolutionFrameDumps')) {
+      newSettings.push(`InternalResolutionFrameDumps = True`)
+    } else if (line.startsWith('BitrateKbps')) {
+      newSettings.push(`BitrateKbps = ${config.bitrateKbps}`)
+    } else if (line.startsWith('EFBScale')) {
+      newSettings.push(`EFBScale = ${config.resolution}`)
+    } else if (line.startsWith('HiresTextures')) {
+      newSettings.push(`HiresTextures = ${texturesEnabled ? 'True' : 'False'}`)
+    } else if (line.startsWith('CacheHiresTextures')) {
+      // Never prefetch: this is offline per-clip framedump, so lazy-loading only
+      // the textures each short clip actually shows is far faster than loading
+      // the whole (multi-hundred-MB) pack up front on every clip's Dolphin boot.
+      newSettings.push(`CacheHiresTextures = False`)
+    } else {
+      newSettings.push(line)
+    }
+  }
+  await fsPromises.writeFile(
+    path.join(destConfigDir, 'GFX.ini'),
+    newSettings.join('\n'),
+  )
+
+  // Dolphin settings — transform the real Dolphin.ini into the temp copy,
+  // forcing the frame/audio dump flags on (in the isolated profile only)
+  rl = readline.createInterface({
+    input: fs.createReadStream(dolphinSettingsPath),
+    crlfDelay: Infinity,
+  })
+  newSettings = []
+  // eslint-disable-next-line no-restricted-syntax
+  for await (const line of rl) {
+    if (line.startsWith('DumpFrames ')) {
+      newSettings.push(`DumpFrames = True`)
+    } else if (line.startsWith('DumpFramesSilent ')) {
+      newSettings.push(`DumpFramesSilent = True`)
+    } else if (line.startsWith('DumpAudio ')) {
+      newSettings.push(`DumpAudio = True`)
+    } else if (line.startsWith('DumpAudioSilent ')) {
+      newSettings.push(`DumpAudioSilent = True`)
+    } else {
+      newSettings.push(line)
+    }
+  }
+  await fsPromises.writeFile(
+    path.join(destConfigDir, 'Dolphin.ini'),
+    newSettings.join('\n'),
+  )
+
+  // Isolate input: a headless recording worker must not grab the user's real
+  // controllers/hotkeys (mirrors slp2mp4's throwaway profile).
+  await fsPromises.writeFile(
+    path.join(destConfigDir, 'Hotkeys.ini'),
+    '[Hotkeys1]\nDevice = /0/\n',
+  )
+
+  // Symlink any enabled HD/custom texture packs into this profile's Load dir.
+  await installTexturePacks(userDir, texturePacks)
+}
+
+// Rewrite an ini file in place, mapping each line through `fn`. Used by the
+// playback profile builder to apply a couple of targeted overrides to copied
+// ini files. A missing file is a no-op.
+const rewriteIniLines = async (
+  file: string,
+  fn: (_line: string) => string,
+): Promise<void> => {
+  let contents: string
+  try {
+    contents = await fsPromises.readFile(file, 'utf8')
+  } catch {
+    return
+  }
+  await fsPromises.writeFile(file, contents.split(/\r?\n/).map(fn).join('\n'))
+}
+
+// Build a throwaway `--user` profile for interactive clip PLAYBACK at `userDir`.
+//
+// Playback used to mutate the user's REAL profile every time a clip was
+// previewed — EFBScale (updateEfbScale), gecko/rendering toggles
+// (writeGeckoCodes) and dump flags (setDolphinDumping) — so watching a clip
+// silently changed their own Dolphin's settings. Instead we COPY the real
+// profile's inis into `userDir` (preserving window/interface/audio settings so
+// the play window looks the same) and apply only the playback overrides to the
+// copies, then launch Dolphin with `--user userDir`. Nothing real is touched;
+// `Sys/` is found relative to the binary. Unlike recording this leaves dump
+// flags OFF — playback must never framedump.
+export const buildPlaybackProfile = async (
+  config: ConfigInterface,
+  userDir: string,
+): Promise<void> => {
+  const { graphicsSettingsPath } = resolveDolphinIniPaths(config)
+  const srcConfigDir = path.dirname(graphicsSettingsPath)
+  const destConfigDir = path.join(userDir, 'Config')
+  const destGameSettingsDir = path.join(userDir, 'GameSettings')
+  await fsPromises.mkdir(destConfigDir, { recursive: true })
+  await fsPromises.mkdir(destGameSettingsDir, { recursive: true })
+
+  // Copy every real Config/*.ini as a base (window/interface/DSP/etc.), then
+  // override just the playback-specific settings below.
+  const entries = await fsPromises
+    .readdir(srcConfigDir)
+    .catch(() => [] as string[])
+  await Promise.all(
+    entries
+      .filter((n) => n.endsWith('.ini'))
+      .map((n) =>
+        fsPromises
+          .copyFile(path.join(srcConfigDir, n), path.join(destConfigDir, n))
+          .catch(() => {}),
+      ),
+  )
+
+  // Gecko / rendering toggles (Hide HUD, widescreen, etc.) from current config
+  await fsPromises.writeFile(
+    path.join(destGameSettingsDir, 'GALE01.ini'),
+    buildGeckoSettings(config).join('\n'),
+  )
+
+  // GFX.ini: playback resolution + HD/custom textures.
+  const playbackResolution =
+    (config as { playbackResolution?: number }).playbackResolution ?? 2
+  const texturePacks = resolveEnabledTexturePacks(config)
+  const texturesEnabled = texturePacks.length > 0
+  const hires = texturesEnabled ? 'True' : 'False'
+  await rewriteIniLines(path.join(destConfigDir, 'GFX.ini'), (line) => {
+    if (line.startsWith('EFBScale')) return `EFBScale = ${playbackResolution}`
+    if (line.startsWith('HiresTextures')) return `HiresTextures = ${hires}`
+    // No prefetch — lazy-load only what's shown (see buildWorkerProfile).
+    if (line.startsWith('CacheHiresTextures'))
+      return 'CacheHiresTextures = False'
+    return line
+  })
+
+  // Dolphin.ini: playback must never framedump
+  const dumpKeys = [
+    'DumpFrames',
+    'DumpFramesSilent',
+    'DumpAudio',
+    'DumpAudioSilent',
+  ]
+  await rewriteIniLines(path.join(destConfigDir, 'Dolphin.ini'), (line) => {
+    const key = dumpKeys.find((k) => line.startsWith(`${k} `))
+    return key ? `${key} = False` : line
+  })
+
+  // Symlink any enabled HD/custom texture packs into this profile's Load dir.
+  await installTexturePacks(userDir, texturePacks)
+}
+
+// Force Dolphin's frame/audio dump flags on or off in the REAL profile's
+// Dolphin.ini. Neither recording nor playback writes the real profile anymore
+// (both use isolated `--user` profiles — buildWorkerProfile / buildPlaybackProfile),
+// so this is now only ever called with `false`, once at the start of a
+// recording run, to HEAL the real profile: it undoes dump flags left on by an
+// older app version that recorded in-place, so a user who opens Dolphin
+// directly to watch a replay never inherits a framedump rig (which on Windows
+// also throws a blocking "overwrite dtkdump.wav?" dialog).
+// Only existing lines are rewritten; a missing Dolphin.ini is a no-op.
+export const setDolphinDumping = async (
+  config: ConfigInterface,
+  enabled: boolean,
+): Promise<void> => {
+  const { dolphinSettingsPath } = resolveDolphinIniPaths(config)
+  let contents: string
+  try {
+    contents = await fsPromises.readFile(dolphinSettingsPath, 'utf8')
+  } catch {
+    return // never recorded yet — no flags to turn off
+  }
+  const value = enabled ? 'True' : 'False'
+  const keys = [
+    'DumpFrames',
+    'DumpFramesSilent',
+    'DumpAudio',
+    'DumpAudioSilent',
+  ]
+  const lines = contents.split(/\r?\n/).map((line) => {
+    const key = keys.find((k) => line.startsWith(`${k} `))
+    return key ? `${key} = ${value}` : line
+  })
+  await fsPromises.writeFile(dolphinSettingsPath, lines.join('\n'))
+}
+
+const slpToVideo = (
+  replays: ReplayInterface[],
+  config: ConfigInterface & { numProcesses: number; gameMusicOn: boolean },
+  eventEmitter: (_msg: string) => void,
+  // Called once per clip the moment its final file is written, so the caller
+  // can report progress incrementally (e.g. checkpointed usage telemetry) and
+  // not lose a whole long render if the process is killed before it finishes.
+  onClipEncoded?: (_replay: ReplayInterface) => void,
+  // Called once per clip that failed every attempt (not a Stop/Cancel), so the
+  // caller can surface a running "N failed" count.
+  onClipFailed?: (_replay: ReplayInterface) => void,
+): VideoJobController => {
+  const signal: VideoSignal = {
+    stopped: false,
+    cancelled: false,
+    activeProcesses: new Set(),
+  }
+
+  const workerStatuses: VideoWorkerStatus[] = Array.from(
+    { length: config.numProcesses },
+    () => ({
+      replayPath: '',
+      phase: 'idle' as const,
+      replayIndex: -1,
+    }),
+  )
+
+  // Backstop for Stop: it asks workers to drain gracefully (let in-flight clips
+  // finish, keep everything done), but if some process is genuinely wedged past
+  // the watchdog, this force-kills whatever is still active so the job can never
+  // hang forever. Cleared the moment the job settles.
+  let stopBackstop: ReturnType<typeof setTimeout> | null = null
+  const forceKillAll = (reason: string) => {
+    if (signal.activeProcesses.size > 0) {
+      logMain(`record: force-killing ${signal.activeProcesses.size} process(es)`, { reason }) // prettier-ignore
+    }
+    signal.activeProcesses.forEach((p) => killTree(p))
+    signal.activeProcesses.clear()
+  }
+
+  const promise = (async () => {
+    try {
+      await fsPromises
+        .access(config.ssbmIsoPath)
+        .catch((err) => {
+          if (err.code === 'ENOENT') {
+            throw new Error(
+              `Error: Could not read SSBM iso from path ${config.ssbmIsoPath}. `,
+            )
+          } else {
+            throw err
+          }
+        })
+        .then(() => fsPromises.access(config.dolphinPath))
+        .catch((err) => {
+          if (err.code === 'ENOENT') {
+            throw new Error(
+              `Error: Could not open Dolphin from path ${config.dolphinPath}. `,
+            )
+          } else {
+            throw err
+          }
+        })
+        // Recording renders in isolated per-worker profiles (built in
+        // processReplays), so nothing here touches the real Slippi profile.
+        // We proactively turn the dump flags OFF in the REAL profile to HEAL
+        // installs poisoned by older app versions that recorded in-place —
+        // after this, opening Dolphin to watch a replay never inherits a
+        // recording rig. No-op on a clean profile.
+        .then(() => setDolphinDumping(config, false))
+        .then(() =>
+          processReplays(
+            replays,
+            config,
+            eventEmitter,
+            signal,
+            workerStatuses,
+            onClipEncoded,
+            onClipFailed,
+          ),
+        )
+        .catch((err) => {
+          logMain('slpToVideo: error', err)
+          eventEmitter(`${err} — Check ${getLogPath()}/main.log`)
+          throw new Error(err)
+        })
+
+      if (signal.stopped) {
+        eventEmitter('Stopped.')
+        setTimeout(() => eventEmitter(''), 2000)
+      } else if (signal.cancelled) {
+        eventEmitter('Cancelled.')
+        setTimeout(() => eventEmitter(''), 2000)
+      }
+    } finally {
+      if (stopBackstop) clearTimeout(stopBackstop)
+    }
+  })()
+
+  return {
+    stop: () => {
+      signal.stopped = true
+      // Arm the backstop once. Workers will normally drain well before this
+      // fires (short clips + the per-Dolphin stale watchdog); it only matters if
+      // something is truly stuck.
+      if (!stopBackstop) {
+        stopBackstop = setTimeout(
+          () => forceKillAll('Stop grace period elapsed'),
+          STOP_GRACE_MS,
+        )
+      }
+    },
+    cancel: () => {
+      signal.cancelled = true
+      forceKillAll('Cancel')
+    },
+    promise,
+    getWorkerStatus: () => workerStatuses,
+  }
+}
+
+export default slpToVideo

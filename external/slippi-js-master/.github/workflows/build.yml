@@ -1,0 +1,51 @@
+name: build
+
+on:
+  pull_request:
+    branches: "**"
+  push:
+    branches:
+      - master
+    paths-ignore:
+      - "**.md"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build on node ${{ matrix.node-version }} and ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        node-version: [24.x]
+        os: [ubuntu-latest, windows-latest, macOS-latest]
+    steps:
+      - name: Use Node.js ${{ matrix.node-version }} on ${{ matrix.os }}
+        uses: actions/setup-node@v6
+        with:
+          node-version: ${{ matrix.node-version }}
+      - uses: actions/checkout@v6
+      - name: Cache node modules
+        uses: actions/cache@v5
+        id: cache
+        with:
+          path: node_modules
+          key: ${{ runner.OS }}-build-${{ hashFiles('**/package-lock.json') }}
+          restore-keys: |
+            ${{ runner.OS }}-build-${{ env.cache-name }}-
+            ${{ runner.OS }}-build-
+            ${{ runner.OS }}-
+      - name: Install dependencies
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          npm install
+      - name: Build
+        run: |
+          npm run build
+      - name: Lint
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          npm run lint

@@ -1,0 +1,205 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            platform: linux
+          - os: windows-latest
+            platform: win
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Determine update channel
+        id: channel
+        shell: bash
+        run: |
+          if [[ "${{ github.ref_name }}" == *-beta* ]]; then
+            echo "channel=beta" >> "$GITHUB_OUTPUT"
+          else
+            echo "channel=latest" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Install dependencies
+        run: npm ci
+
+      # Both ffmpeg hosts are third-party and rate-limit cloud runner IPs, and
+      # they answer a throttled request with a small HTML page rather than an
+      # HTTP error — so a bare download "succeeds" and the extract step blows
+      # up on garbage (this sank the v2.0.0-beta.6 build). Retry with backoff,
+      # and validate the archive's magic bytes before trusting it.
+      - name: Download ffmpeg (Linux)
+        if: matrix.platform == 'linux'
+        run: |
+          set -euo pipefail
+          mkdir -p release/app/ffmpeg
+          url=https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz
+          ok=
+          for attempt in 1 2 3 4 5; do
+            rm -f /tmp/ffmpeg.tar.xz
+            if curl -fL --connect-timeout 20 --max-time 600 -o /tmp/ffmpeg.tar.xz "$url" \
+               && [ -s /tmp/ffmpeg.tar.xz ] \
+               && file -b /tmp/ffmpeg.tar.xz | grep -qi 'XZ compressed'; then
+              ok=1
+              break
+            fi
+            size=$(wc -c < /tmp/ffmpeg.tar.xz 2>/dev/null || echo 0)
+            echo "ffmpeg download attempt $attempt failed (got $size bytes)"
+            sleep $((attempt * 15))
+          done
+          if [ -z "$ok" ]; then
+            echo "::error::ffmpeg download failed after 5 attempts: $url"
+            exit 1
+          fi
+          tar -xf /tmp/ffmpeg.tar.xz -C /tmp
+          cp /tmp/ffmpeg-*-amd64-static/ffmpeg release/app/ffmpeg/ffmpeg-linux-x64
+          chmod +x release/app/ffmpeg/ffmpeg-linux-x64
+
+      - name: Download ffmpeg (Windows)
+        if: matrix.platform == 'win'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          New-Item -ItemType Directory -Force -Path release/app/ffmpeg | Out-Null
+          $url = 'https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip'
+          $zip = "$env:TEMP\ffmpeg.zip"
+          $ok = $false
+          foreach ($attempt in 1..5) {
+            Remove-Item $zip -Force -ErrorAction SilentlyContinue
+            try {
+              Invoke-WebRequest -Uri $url -OutFile $zip -TimeoutSec 600 -UseBasicParsing
+              # "PK" magic marks a real zip; a throttling page will not have it.
+              $head = New-Object byte[] 2
+              $fs = [System.IO.File]::OpenRead($zip)
+              try { $null = $fs.Read($head, 0, 2) } finally { $fs.Close() }
+              if ($head[0] -eq 0x50 -and $head[1] -eq 0x4B) { $ok = $true; break }
+              Write-Host "attempt ${attempt}: not a zip ($((Get-Item $zip).Length) bytes)"
+            } catch {
+              Write-Host "attempt ${attempt}: $_"
+            }
+            Start-Sleep -Seconds ($attempt * 15)
+          }
+          if (-not $ok) {
+            Write-Host "::error::ffmpeg download failed after 5 attempts: $url"
+            exit 1
+          }
+          Expand-Archive -Path $zip -DestinationPath "$env:TEMP\ffmpeg" -Force
+          $ffmpegExe = Get-ChildItem -Path "$env:TEMP\ffmpeg" -Recurse -Filter "ffmpeg.exe" | Select-Object -First 1
+          Copy-Item $ffmpegExe.FullName -Destination "release/app/ffmpeg/ffmpeg-win32-x64.exe"
+
+      # Fail fast if any binary bundled via electron-builder extraResources is
+      # missing or empty (e.g. an ffmpeg download silently failed), instead of
+      # shipping an installer with no ffmpeg. Also log the ffmpeg sha256 so a
+      # supply-chain change in the rolling upstream URLs is visible in the logs.
+      - name: Verify bundled binaries
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${{ matrix.platform }}" = "win" ]; then
+            ffmpeg=release/app/ffmpeg/ffmpeg-win32-x64.exe
+            slpz=release/app/slpz/slpz-win32-x64.exe
+          else
+            ffmpeg=release/app/ffmpeg/ffmpeg-linux-x64
+            slpz=release/app/slpz/slpz-linux-x64
+          fi
+          for f in "$ffmpeg" "$slpz"; do
+            if [ ! -s "$f" ]; then
+              echo "::error::Required bundled binary missing or empty: $f"
+              exit 1
+            fi
+          done
+          echo "ffmpeg sha256: $(sha256sum "$ffmpeg" 2>/dev/null || shasum -a 256 "$ffmpeg")"
+
+      - name: Build
+        run: npm run build
+
+      - name: Package
+        # Force bash on all platforms: PowerShell mis-tokenizes the dotted
+        # `-c.publish.channel=...` arg into `-c` + a bogus file path, which
+        # breaks the Windows build. bash parses it correctly (as Linux proves).
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: npx electron-builder --publish never --${{ matrix.platform }} -c.publish.channel=${{ steps.channel.outputs.channel }}
+
+      - name: Generate checksums (Linux)
+        if: matrix.platform == 'linux'
+        run: |
+          cd release/build
+          sha256sum *.AppImage > SHA256SUMS-linux.txt || true
+          sha256sum *.deb >> SHA256SUMS-linux.txt || true
+
+      - name: Generate checksums (Windows)
+        if: matrix.platform == 'win'
+        shell: pwsh
+        run: |
+          cd release/build
+          Get-ChildItem -Filter *.exe | ForEach-Object {
+            $hash = (Get-FileHash $_.FullName -Algorithm SHA256).Hash
+            "$hash  $($_.Name)" | Out-File -Append SHA256SUMS-win.txt -Encoding ascii
+          }
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.platform }}
+          path: |
+            release/build/*.AppImage
+            release/build/*.deb
+            release/build/*.exe
+            release/build/*.yml
+            release/build/*.blockmap
+            release/build/SHA256SUMS-*.txt
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Determine prerelease
+        id: pre
+        run: |
+          if [[ "${{ github.ref_name }}" == *-beta* ]]; then
+            echo "prerelease=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "prerelease=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: false
+          prerelease: ${{ steps.pre.outputs.prerelease }}
+          generate_release_notes: true
+          files: |
+            artifacts/**/*.AppImage
+            artifacts/**/*.deb
+            artifacts/**/*.exe
+            artifacts/**/*.yml
+            artifacts/**/*.blockmap
+            artifacts/**/SHA256SUMS-*.txt

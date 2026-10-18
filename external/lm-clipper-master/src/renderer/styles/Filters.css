@@ -1,0 +1,1669 @@
+.filters {
+  width: 100%;
+  min-width: 300px;
+  height: 100%;
+  /* Bottom padding = the breathing room below the last in-flow element,
+     whether that's the filter list (when scrolling) or the open +Add menu
+     (which is in normal flow). A scroll container honours its own
+     padding-bottom even when scrolled, unlike a last-child margin-bottom. */
+  padding: 14px 16px 80px;
+  box-sizing: border-box;
+  overflow-y: scroll;
+  direction: rtl;
+  color: #f5f6f8;
+  font-family: 'Space Grotesk', 'Sora', sans-serif;
+  --filter-bg: #17181b;
+  --filter-card: #1e2126;
+  --filter-card-strong: #262a31;
+  --filter-border: #3b4048;
+  --filter-muted: #a7adb7;
+  --filter-accent: #e4e7ec;
+  --filter-accent-strong: #cfd3d9;
+  --filter-warn: #9aa0aa;
+  background: #141518;
+}
+
+.filters > * {
+  direction: ltr;
+}
+
+.filters::-webkit-scrollbar {
+  width: 5px;
+}
+
+.filters::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.filters::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.15);
+  border-radius: 4px;
+}
+
+.filters::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.25);
+}
+
+.filters-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin: 6px 2px 12px;
+}
+
+.filters-title {
+  font-size: 12px;
+  letter-spacing: 0.35em;
+  text-transform: uppercase;
+  color: var(--filter-muted);
+}
+
+.filters-file-count {
+  font-size: 11px;
+  color: #777;
+}
+
+.filters-subtitle {
+  font-size: 12px;
+  color: #c5cbd4;
+}
+
+.filters-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.filter {
+  position: relative;
+  display: block;
+  padding: 12px 12px 12px 16px;
+  background: linear-gradient(
+    135deg,
+    var(--filter-card) 0%,
+    var(--filter-card-strong) 100%
+  );
+  border: 1px solid var(--filter-border);
+  border-radius: 12px;
+  box-shadow: 0 8px 18px -12px rgba(0, 0, 0, 0.8);
+  min-height: 64px;
+  cursor: pointer;
+  transition: transform 150ms ease;
+}
+
+.filter:hover {
+  border-color: #4d525b;
+}
+
+.filter-active,
+.filter-active:hover {
+  border-color: var(--filter-accent);
+  box-shadow: 0 10px 24px -16px rgba(0, 0, 0, 0.65);
+}
+
+/* Run-status tint — a very faint color hint over the base card gradient.
+   gold = needs run (never run, or edited since), green = done (results valid),
+   cyan = running, pale yellow-green = partial. High luminance + low alpha so it
+   reads as a clean hint, not a muddy stain. Active state adds a border, not a
+   background, so the two never fight. */
+.filter-status-needsrun {
+  background:
+    linear-gradient(rgba(240, 206, 130, 0.05), rgba(240, 206, 130, 0.05)),
+    linear-gradient(
+      135deg,
+      var(--filter-card) 0%,
+      var(--filter-card-strong) 100%
+    );
+}
+
+.filter-status-done {
+  background:
+    linear-gradient(rgba(118, 210, 158, 0.04), rgba(118, 210, 158, 0.04)),
+    linear-gradient(
+      135deg,
+      var(--filter-card) 0%,
+      var(--filter-card-strong) 100%
+    );
+}
+
+.filter-status-running {
+  background:
+    linear-gradient(rgba(120, 206, 226, 0.09), rgba(120, 206, 226, 0.09)),
+    linear-gradient(
+      135deg,
+      var(--filter-card) 0%,
+      var(--filter-card-strong) 100%
+    );
+}
+
+/* First-run nudge: a gentle breathing glow on the Run button + a floating chip
+   above it that points down at the button. Both vanish once anything has run. */
+.filter-run-wrap {
+  position: relative;
+  display: inline-flex;
+}
+
+.filter-button-hint {
+  border-color: #6fd3e0 !important;
+  animation: filterRunPulse 1.6s ease-in-out infinite;
+}
+
+/* Fade the glow out on click instead of cutting it abruptly. */
+.filter-button-hint-leaving {
+  border-color: #3a3f47;
+  animation: filterRunPulseOut 320ms ease forwards;
+  transition: border-color 320ms ease;
+}
+
+@keyframes filterRunPulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(111, 211, 224, 0);
+  }
+  50% {
+    box-shadow: 0 0 0 4px rgba(111, 211, 224, 0.4);
+  }
+}
+
+@keyframes filterRunPulseOut {
+  from {
+    box-shadow: 0 0 0 4px rgba(111, 211, 224, 0.4);
+  }
+  to {
+    box-shadow: 0 0 0 0 rgba(111, 211, 224, 0);
+  }
+}
+
+.filter-run-hint {
+  position: absolute;
+  bottom: calc(100% + 9px);
+  left: 50%;
+  transform: translateX(-50%);
+  display: inline-flex;
+  align-items: center;
+  white-space: nowrap;
+  background: #1f6b78;
+  color: #eafcff;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 5px 6px 5px 11px;
+  border-radius: 6px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.45);
+  pointer-events: none;
+  z-index: 5;
+  animation: filterRunHintFloat 1.6s ease-in-out infinite;
+}
+
+.filter-run-hint-close {
+  pointer-events: auto;
+  background: none;
+  border: none;
+  color: rgba(234, 252, 255, 0.65);
+  font-size: 15px;
+  line-height: 1;
+  margin-left: 8px;
+  padding: 0 2px;
+  cursor: pointer;
+}
+
+.filter-run-hint-close:hover {
+  color: #fff;
+}
+
+.filter-run-hint::after {
+  content: '';
+  position: absolute;
+  top: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  border: 5px solid transparent;
+  border-top-color: #1f6b78;
+}
+
+/* Fade + drift the chip out on click. */
+.filter-run-hint--leaving {
+  opacity: 0;
+  animation: none;
+  transition:
+    opacity 300ms ease,
+    transform 300ms ease;
+  transform: translateX(-50%) translateY(-6px);
+}
+
+/* Reassurance note while an expensive parser runs over a big set. Eases open
+   slowly (after a delay handled in JS) so it lands gently, not abruptly. */
+.filter-parser-note {
+  margin: 10px 4px 2px;
+  padding: 11px 14px;
+  border: 1px solid #2a8b9a;
+  background: rgba(31, 107, 120, 0.12);
+  border-radius: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  overflow: hidden;
+  animation: filterParserNoteIn 620ms cubic-bezier(0.22, 0.61, 0.36, 1);
+}
+
+.filter-parser-note-main {
+  font-size: 13px;
+  color: #cfeef3;
+  line-height: 1.5;
+}
+
+.filter-parser-note-dismiss {
+  align-self: flex-start;
+  background: none;
+  border: none;
+  padding: 0;
+  font-size: 12px;
+  color: #8fbcc3;
+  cursor: pointer;
+  text-decoration: underline;
+}
+
+.filter-parser-note-dismiss:hover {
+  color: #cfeef3;
+}
+
+@keyframes filterParserNoteIn {
+  from {
+    opacity: 0;
+    max-height: 0;
+    margin-top: 0;
+    padding-top: 0;
+    padding-bottom: 0;
+  }
+  to {
+    opacity: 1;
+    max-height: 120px;
+    margin-top: 10px;
+    padding-top: 11px;
+    padding-bottom: 11px;
+  }
+}
+
+@keyframes filterRunHintFloat {
+  0%,
+  100% {
+    transform: translateX(-50%) translateY(0);
+  }
+  50% {
+    transform: translateX(-50%) translateY(-3px);
+  }
+}
+
+/* Partial results (stopped mid-run, still usable) — pale yellow-green, between
+   gold and green. */
+.filter-status-partial {
+  background:
+    linear-gradient(rgba(206, 212, 132, 0.05), rgba(206, 212, 132, 0.05)),
+    linear-gradient(
+      135deg,
+      var(--filter-card) 0%,
+      var(--filter-card-strong) 100%
+    );
+}
+
+.filter-main {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.filter-title {
+  font-size: 18px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  padding-right: 170px;
+}
+
+.filter-title-input {
+  background: transparent;
+  border: none;
+  color: inherit;
+  font: inherit;
+  padding: 0;
+  width: 100%;
+  outline: none;
+}
+
+.filter-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  padding-right: 170px;
+}
+
+.filter-collapsed {
+  padding-top: 10px;
+  padding-bottom: 10px;
+  min-height: 52px;
+}
+
+.filter-collapsed .filter-main {
+  gap: 2px;
+}
+
+.filter-controls {
+  padding-top: 6px;
+  max-height: 2000px;
+  overflow: hidden;
+  transition: none;
+  opacity: 1;
+}
+
+.filter-collapsed .filter-controls {
+  max-height: 0;
+  opacity: 0;
+  padding-top: 0;
+}
+
+.filter-no-options {
+  color: #777;
+  font-style: italic;
+  font-size: 12px;
+  padding: 4px 0;
+}
+
+.filter-controls-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 8px 10px;
+}
+
+.filter-control {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.filter-group-inline {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 10px;
+  cursor: pointer;
+}
+
+.filter-group-inline:hover .filter-control-label,
+.filter-group-inline:hover .filter-group-arrow-btn {
+  color: var(--filter-accent);
+}
+
+.filter-group-inline-active .filter-control-label,
+.filter-group-inline-active .filter-group-arrow-btn {
+  color: var(--filter-accent);
+}
+
+.filter-group-arrow-btn {
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border-radius: 4px;
+  border: none;
+  background: transparent;
+  color: var(--filter-muted);
+  font-size: 10px;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.filter-group-arrow-btn:hover {
+  color: var(--filter-accent);
+}
+
+.filter-group-arrow-btn-active {
+  color: var(--filter-accent);
+}
+
+.filter-control-label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.2em;
+  color: var(--filter-muted);
+}
+
+.filter-control-input,
+.filter-control-select {
+  width: 100%;
+  height: 32px;
+  padding: 6px 8px;
+  border-radius: 8px;
+  border: 1px solid var(--filter-border);
+  background: #14171c;
+  color: #f5f6f8;
+  font-size: 12px;
+  letter-spacing: 0.02em;
+  box-sizing: border-box;
+  appearance: none;
+}
+
+.filter-control-input::placeholder {
+  color: #8b919c;
+}
+
+.filter-control-input:focus,
+.filter-control-select:focus {
+  outline: none;
+  border-color: var(--filter-accent);
+  box-shadow: 0 0 0 1px rgba(228, 231, 236, 0.35);
+}
+
+/* Checkbox */
+
+.filter-control-checkbox-wrap {
+  display: flex;
+  align-items: center;
+  height: 32px;
+  cursor: pointer;
+}
+
+.filter-control-checkbox {
+  display: none;
+}
+
+.filter-control-checkbox-mark {
+  width: 20px;
+  height: 20px;
+  border-radius: 6px;
+  border: 1px solid var(--filter-border);
+  background: #14171c;
+  position: relative;
+  transition: all 100ms ease;
+}
+
+.filter-control-checkbox:checked + .filter-control-checkbox-mark {
+  border-color: var(--filter-accent);
+  background: rgba(228, 231, 236, 0.15);
+}
+
+.filter-control-checkbox:checked + .filter-control-checkbox-mark::after {
+  content: '\2714';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  font-size: 12px;
+  color: var(--filter-accent);
+  line-height: 1;
+}
+
+.filter-control-checkbox-disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.filter-control-disabled {
+  opacity: 0.4;
+  pointer-events: none;
+}
+
+/* Nth Moves */
+
+.filter-nth-moves {
+  margin-top: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.filter-nth-moves-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.filter-nth-add {
+  height: 24px;
+  padding: 0 10px;
+  border: 1px solid var(--filter-border);
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.1);
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: #f5f6f8;
+  cursor: pointer;
+}
+
+.filter-nth-add:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.filter-nth-row-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.filter-nth-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.filter-nth-extra {
+  display: flex;
+  align-items: flex-end;
+  gap: 6px;
+  flex-wrap: wrap;
+  padding-left: 4px;
+}
+
+.filter-nth-extra-toggle {
+  width: 28px;
+  height: 32px;
+  padding: 0;
+  border-radius: 6px;
+  border: 1px solid var(--filter-border);
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--filter-muted);
+  font-size: 16px;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.filter-nth-extra-toggle:hover {
+  background: rgba(255, 255, 255, 0.16);
+  border-color: #5a606b;
+}
+
+.filter-nth-extra-toggle-active {
+  border-color: var(--filter-accent);
+  color: var(--filter-accent);
+}
+
+.filter-nth-field {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.filter-nth-field-label {
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.15em;
+  color: var(--filter-muted);
+}
+
+.filter-nth-input {
+  width: 48px;
+}
+
+.filter-nth-field-move {
+  flex: 1;
+  min-width: 90px;
+  max-width: 200px;
+}
+
+.filter-nth-pos-row {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+}
+
+.filter-nth-pos-row .filter-multi-wrap {
+  flex: 1 1 40%;
+  min-width: 0;
+}
+
+.filter-nth-pos-row .filter-multi-select {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.filter-nth-pos-custom-input {
+  flex: 1 1 60%;
+  min-width: 50px;
+  width: auto;
+}
+
+.filter-nth-delete {
+  width: 28px;
+  height: 32px;
+  padding: 0;
+  border-radius: 6px;
+  border: 1px solid #3f444d;
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--filter-warn);
+  font-size: 14px;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.filter-nth-delete:hover {
+  background: rgba(255, 255, 255, 0.16);
+  border-color: #5a606b;
+}
+
+.filter-nth-damage-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 4px;
+  min-width: 0;
+}
+
+.filter-nth-select-small {
+  width: auto;
+  min-width: 56px;
+  height: 32px;
+  padding: 6px 4px 6px 8px;
+  border-radius: 8px;
+  border: 1px solid var(--filter-border);
+  background: #14171c;
+  color: #f5f6f8;
+  font-size: 12px;
+  letter-spacing: 0.02em;
+  box-sizing: border-box;
+  appearance: none;
+}
+
+.filter-nth-select-small:focus {
+  outline: none;
+  border-color: var(--filter-accent);
+  box-shadow: 0 0 0 1px rgba(228, 231, 236, 0.35);
+}
+
+.filter-results,
+.filterMsg,
+.filter-chip {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  padding: 4px 8px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--filter-muted);
+}
+
+.filterMsg {
+  color: #f5f6f8;
+  background: rgba(255, 255, 255, 0.12);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.filterMsg-dismiss {
+  color: #e55;
+  cursor: pointer;
+  font-size: 10px;
+  line-height: 1;
+}
+
+.filterMsg-dismiss:hover {
+  color: #f77;
+}
+
+.filter-chip {
+  border: 1px dashed var(--filter-border);
+  background: transparent;
+  color: var(--filter-muted);
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+}
+
+.filter-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
+  position: absolute;
+  top: 10px;
+  right: 12px;
+}
+
+.filter-button {
+  height: 28px;
+  padding: 0 12px;
+  min-width: 72px;
+  border: 1px solid var(--filter-border);
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.1);
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #f5f6f8;
+  cursor: pointer;
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+}
+
+.filter-button:hover {
+  background: rgba(255, 255, 255, 0.1);
+  border-color: #4a5160;
+}
+
+.filter-button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.filter-zone-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+}
+
+.filter-zone-btn {
+  text-transform: none;
+  letter-spacing: 0.02em;
+}
+
+.filter-zone-summary {
+  font-size: 11px;
+  color: #8b91a0;
+  font-style: italic;
+}
+
+.filter-button-stop {
+  border-color: #a04040;
+  color: #ff9090;
+}
+
+.filter-button-stop:hover {
+  background: rgba(160, 64, 64, 0.25);
+  border-color: #c05050;
+}
+
+.filterIsProcessed {
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  border: 1px solid var(--filter-border);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+  color: #596070;
+  background: rgba(0, 0, 0, 0.15);
+  line-height: 1;
+}
+
+.filterIsProcessed.greenCheck {
+  border-color: var(--filter-accent);
+  color: var(--filter-accent);
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.filter-toggle {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border-radius: 8px;
+  border: 1px solid var(--filter-border);
+  background: rgba(255, 255, 255, 0.08);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: #d6dae1;
+  font-size: 18px;
+  line-height: 1;
+}
+
+.filter-toggle:hover {
+  background: rgba(255, 255, 255, 0.16);
+  border-color: #5a606b;
+}
+
+.filter-delete {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border-radius: 8px;
+  border: 1px solid #3f444d;
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--filter-warn);
+  font-size: 18px;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  appearance: none;
+}
+
+.filter-delete:hover {
+  background: rgba(255, 255, 255, 0.16);
+  border-color: #5a606b;
+}
+
+.filters-footer {
+  display: flex;
+  /* flex-start (not center) so the in-flow dropdown menu stacks below the
+     button instead of vertically centering the tall button+menu block. */
+  align-items: flex-start;
+  gap: 10px;
+  margin-top: 6px;
+  padding-bottom: 16px;
+}
+
+.add-filter-dropdown-wrap {
+  flex: 1;
+  position: relative;
+}
+
+.add-filter-dropdown {
+  width: 100%;
+  border: 1px solid var(--filter-border);
+  border-radius: 10px;
+  background: #20242c;
+  color: #f5f6f8;
+  font-size: 14px;
+  font-family: inherit;
+  padding: 10px 12px;
+  height: 44px;
+  cursor: pointer;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  text-align: left;
+}
+
+.add-filter-dropdown:hover {
+  background: #272c36;
+}
+
+.add-filter-menu {
+  margin-top: 4px;
+  background: #1e2126;
+  border: 1px solid var(--filter-border);
+  border-radius: 10px;
+  padding: 4px 0;
+  /* In normal flow (not absolute) so opening the menu grows the panel's
+     scrollable content. The container's padding-bottom then becomes the gap
+     beneath the menu — self-sizing to any menu length, never clipped flush. */
+  z-index: 100;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+}
+
+.add-filter-item {
+  padding: 8px 14px;
+  font-size: 13px;
+  color: #f5f6f8;
+  cursor: pointer;
+  letter-spacing: 0.04em;
+  position: relative;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.add-filter-item:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.add-filter-item-disabled {
+  color: #555a63;
+  cursor: default;
+}
+
+.add-filter-item-disabled:hover {
+  background: transparent;
+}
+
+.add-filter-hint {
+  font-size: 11px;
+  color: #555a63;
+  font-style: italic;
+}
+
+.add-filter-divider {
+  height: 1px;
+  margin: 4px 10px;
+  background: var(--filter-border);
+}
+
+.add-filter-item-browse {
+  color: #7ab4e8;
+  border-top: 1px solid var(--filter-border);
+  margin-top: 4px;
+  padding-top: 10px;
+}
+
+/* Multi-select dropdown */
+
+.filter-multi-wrap {
+  position: relative;
+  width: 100%;
+}
+
+.filter-multi-select {
+  width: 100%;
+  /* Height is FIXED. Chips never grow this box — the row of them scrolls
+     sideways instead (see .filter-chips), so every × stays reachable. */
+  height: 32px;
+  padding: 0 6px;
+  border-radius: 8px;
+  border: 1px solid var(--filter-border);
+  background: #14171c;
+  color: #f5f6f8;
+  font-size: 12px;
+  letter-spacing: 0.02em;
+  box-sizing: border-box;
+  text-align: left;
+  cursor: pointer;
+  font-family: inherit;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  overflow: hidden;
+}
+
+.filter-multi-select:hover {
+  border-color: #4d525b;
+}
+
+.filter-multi-select:focus-visible {
+  outline: 1px solid #6cf;
+  outline-offset: -1px;
+}
+
+/* Selected values inside a multi-select.
+   NOTE the class names: `filter-chip` was already taken — it's the muted,
+   UPPERCASE, letter-spaced pill shared by .filter-results / .filterMsg (and
+   redefined again below it). Reusing it made these render in caps with the
+   wrong tracking. These carry their own `filter-val-*` names on purpose. */
+
+/* Nothing selected — the old "Any" text. Matches ::placeholder on the inputs. */
+.filter-multi-placeholder {
+  color: #8b919c;
+}
+
+/* One line, never wraps. Overflowing chips scroll sideways (wheel -> horizontal,
+   handled in SelectChips) rather than pushing the selector taller — its height
+   is fixed. Scrollbar hidden; a visible one would eat height inside 32px. */
+.filter-val-chips {
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none; /* Firefox */
+}
+
+.filter-val-chips::-webkit-scrollbar {
+  height: 0;
+  display: none;
+}
+
+/* Only when chips run past the right edge: fade the last one out so overflow is
+   visible instead of a silent hard cut. Set by SelectChips via ResizeObserver. */
+.filter-val-chips-overflow {
+  mask-image: linear-gradient(to right, #000 calc(100% - 24px), transparent);
+}
+
+/* ---- The pill itself ------------------------------------------------------
+   Used both in the field and in the dropdown's selected area, so the two read
+   as the same object. Reads as part of the field, not a box inside a box: no
+   border, just a faint lift off the input's background. Type matches the field
+   exactly (12px / 0.02em / sentence case) — a name should look like the name.
+   20px tall, so it sits comfortably inside the 32px field without ever
+   affecting its height. */
+.filter-val-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 1px;
+  flex: 0 0 auto; /* never squash — a squashed pill hides its × */
+  max-width: 150px;
+  height: 20px;
+  padding: 0 3px 0 9px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.09);
+  color: #f5f6f8;
+  font-size: 12px;
+  letter-spacing: 0.02em;
+  text-transform: none;
+  line-height: 1;
+}
+
+.filter-val-chip-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The remove control. An <FiX> SVG, NOT a "×" text glyph — the glyph never
+   optically centres and reads as a typo next to the app's real icons. Quiet
+   until you go for it: the pill is the object, the × is just the affordance. */
+.filter-val-chip-x {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  color: #9aa1ab;
+  cursor: pointer;
+  user-select: none;
+  transition:
+    background 0.12s ease,
+    color 0.12s ease;
+}
+
+.filter-val-chip-x svg {
+  display: block;
+  width: 11px;
+  height: 11px;
+  stroke-width: 2.5;
+}
+
+.filter-val-chip-x:hover {
+  background: rgba(255, 255, 255, 0.16);
+  color: #fff;
+}
+
+.filter-val-chip-x:focus-visible {
+  outline: 1px solid #6cf;
+  outline-offset: 1px;
+}
+
+/* ---- Divider between the pinned selected rows and the rest of the list ----
+   Selected values sort to the TOP of the dropdown list, so a value you've picked
+   is never something you have to hunt for again. Deliberately NOT a second panel
+   of pills: the field directly above already shows those, and repeating them in
+   the menu reads as two lists of the same thing. One list, ordered. This thin
+   rule is the only chrome, and it carries Clear all. */
+.filter-multi-divider {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 8px;
+}
+
+.filter-multi-divider-line {
+  flex: 1 1 auto;
+  height: 1px;
+  background: var(--filter-border);
+}
+
+/* Destructive, and sitting on a divider rather than in a text row, so there is
+   nothing for it to be mistaken for. App's existing danger palette
+   (cf. .filter-warn-btn-danger). Only rendered at 2+ selections. */
+.filter-multi-clear {
+  flex: 0 0 auto;
+  height: 20px;
+  padding: 0 9px;
+  border: 1px solid #4a3a3a;
+  border-radius: 999px;
+  background: rgba(190, 70, 70, 0.14);
+  color: #d69a9a;
+  font-family: inherit;
+  font-size: 11px;
+  letter-spacing: 0.02em;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+  transition:
+    background 0.12s ease,
+    border-color 0.12s ease,
+    color 0.12s ease;
+}
+
+.filter-multi-clear:hover {
+  background: rgba(200, 70, 70, 0.32);
+  border-color: #b56a6a;
+  color: #fff;
+}
+
+.filter-multi-clear:focus-visible {
+  outline: 1px solid #6cf;
+  outline-offset: 1px;
+}
+
+.filter-multi-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 9998;
+}
+
+.filter-multi-menu {
+  background: #1e2126;
+  border: 1px solid var(--filter-border);
+  border-radius: 10px;
+  padding: 4px 0;
+  z-index: 9999;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+  max-height: 240px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  min-width: 140px;
+}
+
+.filter-multi-menu::-webkit-scrollbar {
+  width: 5px;
+}
+
+.filter-multi-menu::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.filter-multi-menu::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.15);
+  border-radius: 4px;
+}
+
+.filter-multi-menu::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.25);
+}
+
+.filter-multi-search {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 6px 10px;
+  font-size: 12px;
+  color: #f5f6f8;
+  background: rgba(255, 255, 255, 0.06);
+  border: none;
+  border-bottom: 1px solid var(--filter-border);
+  outline: none;
+  letter-spacing: 0.04em;
+  font-family: inherit;
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+
+.filter-multi-search::placeholder {
+  color: var(--filter-muted);
+  opacity: 0.7;
+}
+
+.filter-multi-search:focus {
+  background: rgba(255, 255, 255, 0.09);
+}
+
+.filter-multi-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 12px;
+  font-size: 12px;
+  color: var(--filter-muted);
+  letter-spacing: 0.04em;
+}
+
+.filter-multi-more {
+  padding: 6px 10px;
+  font-size: 11px;
+  color: var(--filter-muted);
+  text-align: center;
+  border-top: 1px solid var(--filter-border);
+  letter-spacing: 0.04em;
+}
+
+.filter-multi-spinner {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  border: 2px solid rgba(255, 255, 255, 0.15);
+  border-top-color: var(--filter-muted);
+  border-radius: 50%;
+  animation: filter-spin 0.8s linear infinite;
+}
+
+@keyframes filter-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Inline spinner shown in place of a filter's result count while it hydrates */
+.filter-results-spinner {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  vertical-align: -1px;
+  border: 2px solid rgba(255, 255, 255, 0.15);
+  border-top-color: var(--filter-muted);
+  border-radius: 50%;
+  animation: filter-spin 0.8s linear infinite;
+}
+
+.filter-multi-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 10px;
+  font-size: 12px;
+  color: #f5f6f8;
+  cursor: pointer;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+  user-select: none;
+}
+
+.filter-multi-item:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.filter-multi-item-checked {
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.filter-multi-check {
+  width: 14px;
+  height: 14px;
+  border-radius: 3px;
+  border: 1px solid var(--filter-border);
+  background: #14171c;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  color: transparent;
+  flex-shrink: 0;
+  transition:
+    border-color 80ms ease,
+    background 80ms ease,
+    color 80ms ease;
+}
+
+.filter-multi-item-all {
+  border-bottom: 1px solid var(--filter-border);
+  margin-bottom: 2px;
+  padding-bottom: 6px;
+}
+
+.filter-multi-item-checked .filter-multi-check {
+  border-color: var(--filter-accent);
+  background: rgba(228, 231, 236, 0.12);
+  color: var(--filter-accent);
+}
+
+/* Name select count */
+
+.filter-multi-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
+.filter-autocomplete-count {
+  font-size: 10px;
+  color: var(--filter-muted);
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+.no-archive {
+  margin: 16px 4px;
+  color: var(--filter-muted);
+  font-size: 14px;
+}
+
+/* Parser delete warning modal */
+
+.filter-warn-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.35);
+}
+
+.filter-warn-modal {
+  width: 360px;
+  max-width: calc(100vw - 40px);
+  background: linear-gradient(
+    135deg,
+    var(--filter-card) 0%,
+    var(--filter-card-strong) 100%
+  );
+  border: 1px solid var(--filter-border);
+  border-radius: 14px;
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.7);
+  padding: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.filter-warn-title {
+  font-size: 16px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: #f5f6f8;
+}
+
+.filter-warn-body {
+  font-size: 13px;
+  color: var(--filter-muted);
+  line-height: 1.4;
+}
+
+.filter-warn-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.filter-warn-item {
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 4px 0;
+  color: var(--filter-accent);
+}
+
+.filter-warn-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  align-self: flex-end;
+  height: 32px;
+  padding: 0 18px;
+  border: 1px solid var(--filter-border);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.08);
+  color: #f5f6f8;
+  font-size: 12px;
+  font-family: inherit;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  cursor: pointer;
+  margin-top: 4px;
+}
+
+/* In the actions row, keep every button the same height and baseline so a
+   2- or 3-button row lines up cleanly (the base rule's flex-end/margin-top is
+   for single right-aligned buttons elsewhere). */
+.filter-warn-actions .filter-warn-btn {
+  align-self: center;
+  margin-top: 0;
+}
+
+.filter-warn-btn:hover {
+  background: rgba(255, 255, 255, 0.14);
+  border-color: var(--filter-accent);
+}
+
+/* Filter error modal */
+
+.filter-error-modal {
+  max-width: 480px;
+}
+
+.filter-error-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+.filter-error-item {
+  font-size: 12px;
+  font-family: monospace;
+  color: #ff8a8a;
+  background: rgba(255, 80, 80, 0.08);
+  padding: 6px 10px;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 80, 80, 0.15);
+  word-break: break-word;
+  line-height: 1.4;
+}
+
+.filter-logs-modal {
+  max-width: 540px;
+}
+
+.filter-logs-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 300px;
+  overflow-y: auto;
+  background: #0d0f13;
+  border-radius: 6px;
+  padding: 8px;
+  border: 1px solid #2e333d;
+}
+
+.filter-logs-item {
+  font-size: 12px;
+  font-family: monospace;
+  color: #a6e3a1;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* Drag-and-drop reorder */
+
+.filter-dragging {
+  opacity: 0.35;
+}
+
+.filter:not(.filter-pinned):active {
+  cursor: grabbing;
+}
+
+.drag-warning-toast {
+  position: fixed;
+  bottom: 24px;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 8px 18px;
+  background: rgba(30, 33, 38, 0.95);
+  border: 1px solid #a04040;
+  border-radius: 8px;
+  color: #ff9090;
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+  z-index: 2000;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.6);
+  animation: drag-toast-in 150ms ease;
+  pointer-events: none;
+}
+
+@keyframes drag-toast-in {
+  from {
+    opacity: 0;
+    transform: translateX(-50%) translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
+  }
+}
+
+/* Resume button */
+
+.filter-resume-wrap {
+  display: inline-flex;
+}
+
+.filter-button-resume {
+  border-color: #3a6b3a;
+  color: #80d080;
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+  min-width: 0;
+  padding: 0 10px;
+}
+
+.filter-button-resume:hover {
+  background: rgba(60, 120, 60, 0.2);
+  border-color: #4a8b4a;
+}
+
+.filter-resume-dismiss {
+  height: 28px;
+  width: 24px;
+  padding: 0;
+  border: 1px solid #6b3a3a;
+  border-left: none;
+  border-radius: 0 8px 8px 0;
+  background: rgba(0, 0, 0, 0.1);
+  color: #e06060;
+  font-size: 12px;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.filter-resume-progress {
+  margin-left: 6px;
+  opacity: 0.7;
+}
+
+.filter-progress-pill {
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  opacity: 0.7;
+  margin-right: 10px;
+}
+
+.filter-resume-dismiss:hover {
+  background: rgba(160, 50, 50, 0.2);
+  border-color: #8b4a4a;
+}
+
+/* Branching: per-filter input source selector */
+
+.filter-input-source {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 8px 0 2px;
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  color: var(--filter-muted);
+}
+
+.filter-input-source-label {
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.filter-input-source-select {
+  flex: 1;
+  min-width: 0;
+  max-width: 220px;
+  height: 26px;
+  padding: 0 8px;
+  border: 1px solid var(--filter-border);
+  border-radius: 6px;
+  background: var(--filter-bg);
+  color: #f5f6f8;
+  font-family: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.filter-input-source-select:hover {
+  border-color: var(--filter-accent);
+}
+
+/* A filter nested under a branch (indentLevel > 0). The left margin is applied
+   inline per depth; the cyan rail groups the branch subtree visually. Linear
+   chains (depth 0) never get this class, so they stay flush-left. */
+.filter-branch {
+  border-left: 2px solid #4fb6c6;
+}
+
+.filter-branch .filter-input-source-label {
+  color: #7fd3df;
+}
+
+/* Confirm-reset modal extras */
+
+.filter-warn-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--filter-muted);
+  cursor: pointer;
+  user-select: none;
+}
+
+.filter-warn-checkbox input {
+  cursor: pointer;
+}
+
+.filter-warn-actions {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 10px;
+}
+
+.filter-warn-btn-secondary {
+  align-self: auto;
+  margin-top: 0;
+}
+
+.filter-warn-btn-danger {
+  align-self: auto;
+  margin-top: 0;
+  background: rgba(190, 70, 70, 0.22);
+  border-color: #8b4a4a;
+}
+
+.filter-warn-btn-danger:hover {
+  background: rgba(200, 70, 70, 0.32);
+  border-color: #b56a6a;
+}
+
+/* Severity accent for the three reset-warning tiers (top border + glow). */
+.filter-warn-low {
+  border-top: 3px solid #5a9bd4;
+}
+
+.filter-warn-medium {
+  border-top: 3px solid #e0a23c;
+  box-shadow:
+    0 24px 80px rgba(0, 0, 0, 0.7),
+    0 0 0 1px rgba(224, 162, 60, 0.25);
+}
+
+.filter-warn-high {
+  border-top: 3px solid #d65454;
+  box-shadow:
+    0 24px 80px rgba(0, 0, 0, 0.7),
+    0 0 0 1px rgba(214, 84, 84, 0.35);
+}

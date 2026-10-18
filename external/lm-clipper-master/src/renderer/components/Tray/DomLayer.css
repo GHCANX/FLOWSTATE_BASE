@@ -1,0 +1,47 @@
+/**
+ * DomLayer Styles
+ */
+
+.dom-layer {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  scrollbar-width: thin;
+  scrollbar-color: #3a3a3a transparent;
+}
+
+.dom-layer::-webkit-scrollbar {
+  width: 6px;
+}
+
+.dom-layer::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.dom-layer::-webkit-scrollbar-thumb {
+  background: #3a3a3a;
+  border-radius: 3px;
+}
+
+.dom-layer::-webkit-scrollbar-thumb:hover {
+  background: #505050;
+}
+
+.dom-layer--reordering {
+  cursor: grabbing !important;
+}
+
+.dom-layer--reordering * {
+  cursor: grabbing !important;
+  pointer-events: none;
+}
+
+.reorder-indicator {
+  background: #4a9d5b;
+  border-radius: 2px;
+  z-index: 10;
+  pointer-events: none;
+  box-shadow: 0 0 8px rgba(74, 157, 91, 0.6);
+}
