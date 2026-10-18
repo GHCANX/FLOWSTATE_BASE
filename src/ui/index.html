@@ -241,42 +241,281 @@
         </div>
       </section>
 
-      <!-- Right Panel: Terminal Output Viewer -->
-      <section class="panel terminal-panel" aria-labelledby="terminal-heading">
-        <div class="panel-header terminal-header">
-          <div class="terminal-title-group">
-            <h2 id="terminal-heading" class="panel-title">Execution Console</h2>
-            <div id="execution-badge" class="badge-status idle">
-              <span class="badge-dot"></span>
-              <span id="badge-text">IDLE</span>
+      <!-- Right Workspace: Top Dashboard + Bottom Console Tray -->
+      <div class="workspace-right">
+        <!-- Top Panel: Analytics & Ingestion Dashboard -->
+        <section class="panel dashboard-panel" aria-labelledby="dashboard-heading">
+          <div class="panel-header dashboard-header">
+            <div class="dashboard-title-group">
+              <h2 id="dashboard-heading" class="panel-title">Pipeline Telemetry &amp; Melee Analytics</h2>
+              <div class="live-indicator">
+                <span class="live-dot"></span>
+                <span class="live-text" id="live-sync-text">LIVE SYNC</span>
+              </div>
+              <span id="last-synced-time" class="last-sync-display">Updated Just Now</span>
             </div>
-            <span id="execution-timer" class="timer-display">00:00.0</span>
+            <div class="dashboard-actions">
+              <button type="button" id="btn-refresh-dashboard" class="btn-secondary btn-sm" title="Refresh Telemetry">
+                <span id="refresh-spinner" class="refresh-icon">↺</span> Refresh
+              </button>
+            </div>
           </div>
 
-          <div class="terminal-actions">
-            <button type="button" id="btn-abort" class="btn-danger btn-sm" disabled title="Cancel running command (SIGINT)">
-              ■ Abort
-            </button>
-            <button type="button" id="btn-clear-term" class="btn-secondary btn-sm" title="Clear console output">
-              Clear
-            </button>
-            <button type="button" id="btn-copy-output" class="btn-secondary btn-sm" title="Copy console logs to clipboard">
-              Copy Output 📋
-            </button>
-          </div>
-        </div>
+          <div class="dashboard-body" id="dashboard-body">
+            <!-- Empty State Overlay (shown if games === 0) -->
+            <div id="dashboard-empty" class="dashboard-empty hidden">
+              <div class="empty-icon">🎮</div>
+              <h3 class="empty-title">No Replay Telemetry Found</h3>
+              <p class="empty-desc">The local database contains 0 ingested matches. Run sliding-window batch ingestion from Lunar Melee API to unlock competitive performance telemetry.</p>
+              <button type="button" id="btn-empty-start-sync" class="btn-primary btn-md">
+                ⚡ Start First Ingestion Sync
+              </button>
+            </div>
 
-        <!-- Terminal Output Area -->
-        <div class="terminal-viewport" id="terminal-viewport">
-          <div id="terminal-output" class="terminal-output" role="log" aria-live="polite">
+            <!-- Loading Skeleton (shown while fetching) -->
+            <div id="dashboard-loading" class="dashboard-loading hidden">
+              <div class="skeleton-kpis">
+                <div class="skeleton-card"></div>
+                <div class="skeleton-card"></div>
+                <div class="skeleton-card"></div>
+                <div class="skeleton-card"></div>
+                <div class="skeleton-card"></div>
+              </div>
+              <div class="skeleton-box skeleton-funnel"></div>
+              <div class="skeleton-panels">
+                <div class="skeleton-box skeleton-half"></div>
+                <div class="skeleton-box skeleton-half"></div>
+              </div>
+            </div>
+
+            <!-- Active Content Container -->
+            <div id="dashboard-content" class="dashboard-content">
+              <!-- Row 1: KPI Stat Cards -->
+              <div class="kpi-grid">
+                <div class="kpi-card" id="kpi-total-games">
+                  <span class="kpi-label">TOTAL GAMES</span>
+                  <span class="kpi-value" id="kpi-games-val">--</span>
+                  <span class="kpi-sub" id="kpi-games-sub">Committed to SQLite</span>
+                </div>
+                <div class="kpi-card" id="kpi-success-rate">
+                  <span class="kpi-label">INGESTION HEALTH</span>
+                  <span class="kpi-value text-green" id="kpi-health-val">--%</span>
+                  <span class="kpi-sub" id="kpi-health-sub">0 failures recorded</span>
+                </div>
+                <div class="kpi-card" id="kpi-checkpoint">
+                  <span class="kpi-label">ACTIVE CHECKPOINT</span>
+                  <span class="kpi-value text-cyan" id="kpi-checkpoint-val">--</span>
+                  <span class="kpi-sub" id="kpi-checkpoint-sub">Sliding window cursor</span>
+                </div>
+                <div class="kpi-card" id="kpi-lcancel">
+                  <span class="kpi-label">AVG L-CANCEL</span>
+                  <span class="kpi-value text-yellow" id="kpi-lcancel-val">--%</span>
+                  <span class="kpi-sub" id="kpi-lcancel-sub">Melee execution rate</span>
+                </div>
+                <div class="kpi-card" id="kpi-movement">
+                  <span class="kpi-label">AVG WAVEDASHES</span>
+                  <span class="kpi-value text-magenta" id="kpi-wavedash-val">--</span>
+                  <span class="kpi-sub" id="kpi-wavedash-sub">Per match aggregate</span>
+                </div>
+              </div>
+
+              <!-- Row 2: Full-Width Ingestion Funnel -->
+              <div class="funnel-container">
+                <div class="funnel-header">
+                  <span class="funnel-title">INGESTION PIPELINE FUNNEL</span>
+                  <span class="funnel-badge" id="funnel-status-badge">OPTIMAL // ZERO ACCUMULATION</span>
+                </div>
+                <div class="funnel-stages">
+                  <!-- Stage 1 -->
+                  <div class="funnel-stage" id="stage-lunar">
+                    <div class="stage-icon">🌐</div>
+                    <div class="stage-info">
+                      <span class="stage-name">Lunar Melee API</span>
+                      <span class="stage-metric" id="stage-lunar-metric">Rate: &le;24/min</span>
+                    </div>
+                    <span class="stage-badge status-ok">CONNECTED</span>
+                  </div>
+
+                  <div class="funnel-arrow">➔</div>
+
+                  <!-- Stage 2 -->
+                  <div class="funnel-stage" id="stage-buffer">
+                    <div class="stage-icon">📥</div>
+                    <div class="stage-info">
+                      <span class="stage-name">Temp Buffer</span>
+                      <span class="stage-metric" id="stage-buffer-metric">0 .slp files</span>
+                    </div>
+                    <span class="stage-badge status-clean" id="stage-buffer-badge">PURGED</span>
+                  </div>
+
+                  <div class="funnel-arrow">➔</div>
+
+                  <!-- Stage 3 -->
+                  <div class="funnel-stage" id="stage-parser">
+                    <div class="stage-icon">⚡</div>
+                    <div class="stage-info">
+                      <span class="stage-name">SLP Frame Parser</span>
+                      <span class="stage-metric" id="stage-parser-metric">20+ Tech Detectors</span>
+                    </div>
+                    <span class="stage-badge status-ready">ACTIVE</span>
+                  </div>
+
+                  <div class="funnel-arrow">➔</div>
+
+                  <!-- Stage 4 -->
+                  <div class="funnel-stage" id="stage-sqlite">
+                    <div class="stage-icon">🗄️</div>
+                    <div class="stage-info">
+                      <span class="stage-name">SQLite Catalog</span>
+                      <span class="stage-metric" id="stage-sqlite-metric">analytics.db</span>
+                    </div>
+                    <span class="stage-badge status-ok" id="stage-sqlite-badge">INDEXED</span>
+                  </div>
+
+                  <div class="funnel-arrow">➔</div>
+
+                  <!-- Stage 5 -->
+                  <div class="funnel-stage" id="stage-payload">
+                    <div class="stage-icon">📦</div>
+                    <div class="stage-info">
+                      <span class="stage-name">Payload Gz</span>
+                      <span class="stage-metric" id="stage-payload-metric">Date-sharded</span>
+                    </div>
+                    <span class="stage-badge status-ok">PERSISTED</span>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Row 3: Split Telemetry Panels -->
+              <div class="telemetry-grid">
+                <!-- Left Sub-Panel: Pipeline Health & Replay Audit -->
+                <div class="telemetry-card">
+                  <div class="card-title-bar">
+                    <span class="card-title">Checkpoint &amp; Replay Audit</span>
+                    <span class="card-status-pill" id="audit-status-pill">ALL SYSTEMS NOMINAL</span>
+                  </div>
+                  <div class="audit-details-grid">
+                    <div class="audit-item">
+                      <span class="audit-label">Active Run ID</span>
+                      <span class="audit-value text-mono" id="audit-run-name">--</span>
+                    </div>
+                    <div class="audit-item">
+                      <span class="audit-label">Replays Downloaded</span>
+                      <span class="audit-value text-mono" id="audit-downloaded">--</span>
+                    </div>
+                    <div class="audit-item">
+                      <span class="audit-label">Replays Committed</span>
+                      <span class="audit-value text-mono text-green" id="audit-processed">--</span>
+                    </div>
+                    <div class="audit-item">
+                      <span class="audit-label">Corrupt / Failed</span>
+                      <span class="audit-value text-mono text-red" id="audit-failed">0</span>
+                    </div>
+                  </div>
+                  <div class="audit-log-box" id="audit-log-box">
+                    <span class="t-dim">No corruption errors logged. Batch pipeline operating cleanly.</span>
+                  </div>
+                </div>
+
+                <!-- Right Sub-Panel: Competitive Mechanical Benchmarks -->
+                <div class="telemetry-card">
+                  <div class="card-title-bar">
+                    <span class="card-title">Competitive Mechanical Benchmarks</span>
+                    <span class="card-status-pill" id="top-chars-pill">Top: Fox, Marth</span>
+                  </div>
+                  <div class="benchmarks-list">
+                    <!-- Meter 1: L-Cancel -->
+                    <div class="meter-item">
+                      <div class="meter-header">
+                        <span class="meter-label">L-Cancel Execution</span>
+                        <span class="meter-val text-green" id="meter-lcancel-val">--%</span>
+                      </div>
+                      <div class="meter-bar-track">
+                        <div class="meter-bar-fill fill-green" id="meter-lcancel-fill" style="width: 0%"></div>
+                      </div>
+                    </div>
+
+                    <!-- Meter 2: Dash Dancing -->
+                    <div class="meter-item">
+                      <div class="meter-header">
+                        <span class="meter-label">Dash Dance Turns / Game</span>
+                        <span class="meter-val text-cyan" id="meter-dash-val">--</span>
+                      </div>
+                      <div class="meter-bar-track">
+                        <div class="meter-bar-fill fill-cyan" id="meter-dash-fill" style="width: 0%"></div>
+                      </div>
+                    </div>
+
+                    <!-- Meter 3: Wavedashes -->
+                    <div class="meter-item">
+                      <div class="meter-header">
+                        <span class="meter-label">Wavedash Landings / Game</span>
+                        <span class="meter-val text-magenta" id="meter-wavedash-val">--</span>
+                      </div>
+                      <div class="meter-bar-track">
+                        <div class="meter-bar-fill fill-magenta" id="meter-wavedash-fill" style="width: 0%"></div>
+                      </div>
+                    </div>
+
+                    <!-- Meter 4: Inputs Per Minute -->
+                    <div class="meter-item">
+                      <div class="meter-header">
+                        <span class="meter-label">Mean Inputs Per Minute (IPM)</span>
+                        <span class="meter-val text-yellow" id="meter-ipm-val">--</span>
+                      </div>
+                      <div class="meter-bar-track">
+                        <div class="meter-bar-fill fill-yellow" id="meter-ipm-fill" style="width: 0%"></div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- Bottom Panel: Console Tray (3-State Accordion) -->
+        <section class="panel terminal-panel tray-default" id="terminal-tray" aria-labelledby="terminal-heading">
+          <div class="panel-header terminal-header">
+            <div class="terminal-title-group">
+              <h2 id="terminal-heading" class="panel-title">Execution Console</h2>
+              <div id="execution-badge" class="badge-status idle">
+                <span class="badge-dot"></span>
+                <span id="badge-text">IDLE</span>
+              </div>
+              <span id="execution-timer" class="timer-display">00:00.0</span>
+            </div>
+
+            <div class="terminal-actions">
+              <button type="button" id="btn-abort" class="btn-danger btn-sm" disabled title="Cancel running command (SIGINT)">
+                ■ Abort
+              </button>
+              <button type="button" id="btn-clear-term" class="btn-secondary btn-sm" title="Clear console output">
+                Clear
+              </button>
+              <button type="button" id="btn-copy-output" class="btn-secondary btn-sm" title="Copy console logs to clipboard">
+                Copy Output 📋
+              </button>
+              <div class="tray-size-controls" role="group" aria-label="Console Tray Height Controls">
+                <button type="button" id="btn-tray-min" class="btn-tray-icon" title="Minimize Tray (38px)">—</button>
+                <button type="button" id="btn-tray-default" class="btn-tray-icon active" title="Default Height (200px)">◻</button>
+                <button type="button" id="btn-tray-max" class="btn-tray-icon" title="Maximize Tray (60%)">⤢</button>
+              </div>
+            </div>
+          </div>
+
+          <!-- Terminal Output Area -->
+          <div class="terminal-viewport" id="terminal-viewport">
+            <div id="terminal-output" class="terminal-output" role="log" aria-live="polite">
 <span class="t-dim">===============================================================</span>
 <span class="t-cyan">⚡ Flowstate Melee Analysis Engine // Web Console v1.0 ⚡</span>
 <span class="t-dim">Select a command category above and click [Run Command] to execute.</span>
 <span class="t-dim">Output from stdout and stderr will stream here in real-time.</span>
 <span class="t-dim">===============================================================</span>
 </div>
-        </div>
-      </section>
+          </div>
+        </section>
+      </div>
     </main>
   </div>
 

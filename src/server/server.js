@@ -133,6 +133,120 @@ export function createServer() {
       return;
     }
 
+    if (pathname === '/api/pipeline/status' && req.method === 'GET') {
+      try {
+        const db = getDatabase('./analytics.db');
+        const activeCheckpoint = db.prepare(`
+          SELECT * FROM ingestion_progress 
+          ORDER BY updated_at DESC, id DESC 
+          LIMIT 1
+        `).get() || null;
+
+        const totalGamesRow = db.prepare('SELECT COUNT(*) as count FROM games').get();
+        const totalGames = totalGamesRow ? totalGamesRow.count : 0;
+
+        let tempSlpCount = 0;
+        const tempDir = path.resolve(process.cwd(), 'temp_slp');
+        if (fs.existsSync(tempDir)) {
+          const files = fs.readdirSync(tempDir);
+          tempSlpCount = files.filter(f => f.endsWith('.slp')).length;
+        }
+
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({
+          activeCheckpoint,
+          totalGames,
+          tempSlpCount,
+          timestamp: new Date().toISOString(),
+        }));
+      } catch (err) {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: err.message }));
+      }
+      return;
+    }
+
+    if (pathname === '/api/analytics/mechanics' && req.method === 'GET') {
+      try {
+        const db = getDatabase('./analytics.db');
+        const mechanics = db.prepare(`
+          SELECT 
+            AVG(l_cancel_rate) as avg_l_cancel_rate,
+            AVG(wavedash_count) as avg_wavedashes,
+            AVG(dash_dance_turns) as avg_dash_turns,
+            AVG(shield_drops) as avg_shield_drops
+          FROM player_mechanics_stats
+        `).get() || {};
+
+        const overall = db.prepare(`
+          SELECT 
+            AVG(ipm) as avg_ipm,
+            AVG(openings_per_kill) as avg_opk,
+            AVG(damage_per_opening) as avg_dpo
+          FROM player_overall_stats
+        `).get() || {};
+
+        const topCharactersRows = db.prepare(`
+          SELECT character_id, COUNT(*) as games_played
+          FROM game_players
+          GROUP BY character_id
+          ORDER BY games_played DESC
+          LIMIT 5
+        `).all();
+
+        const topCharacters = topCharactersRows.map(r => ({
+          characterId: r.character_id,
+          characterName: CHARACTER_NAMES[r.character_id] || `Char ${r.character_id}`,
+          gamesPlayed: r.games_played,
+        }));
+
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({
+          mechanics,
+          overall,
+          topCharacters,
+        }));
+      } catch (err) {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: err.message }));
+      }
+      return;
+    }
+
+    if (pathname === '/api/audit/errors' && req.method === 'GET') {
+      try {
+        const db = getDatabase('./analytics.db');
+        const statusRows = db.prepare(`
+          SELECT status, COUNT(*) as count
+          FROM replay_status
+          GROUP BY status
+        `).all();
+
+        const statusCounts = {};
+        for (const row of statusRows) {
+          statusCounts[row.status] = row.count;
+        }
+
+        const recentFailures = db.prepare(`
+          SELECT replay_id, file_hash, source, status, error_message, processed_at
+          FROM replay_status
+          WHERE status != 'COMPLETED'
+          ORDER BY processed_at DESC
+          LIMIT 10
+        `).all();
+
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({
+          statusCounts,
+          recentFailures,
+        }));
+      } catch (err) {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: err.message }));
+      }
+      return;
+    }
+
     if (pathname === '/api/abort' && req.method === 'POST') {
       if (!activeProcess) {
         res.writeHead(200, { 'Content-Type': 'application/json' });

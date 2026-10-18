@@ -122,6 +122,34 @@ async function runServerTests() {
     assert.strictEqual(abortData.aborted, false, 'Should report not aborted when idle');
     console.log('  ✔ Abort API correctly handled idle state.');
 
+    // 9. Test API Pipeline Status
+    console.log('9. Testing GET /api/pipeline/status...');
+    const pipelineRes = await fetchHttp(`${baseUrl}/api/pipeline/status`);
+    assert.strictEqual(pipelineRes.status, 200);
+    const pipelineData = JSON.parse(pipelineRes.body);
+    assert('totalGames' in pipelineData, 'Pipeline data contains totalGames');
+    assert('tempSlpCount' in pipelineData, 'Pipeline data contains tempSlpCount');
+    console.log(`  ✔ Pipeline Status API returned totalGames=${pipelineData.totalGames}, tempSlpCount=${pipelineData.tempSlpCount}.`);
+
+    // 10. Test API Mechanics Telemetry
+    console.log('10. Testing GET /api/analytics/mechanics...');
+    const mechRes = await fetchHttp(`${baseUrl}/api/analytics/mechanics`);
+    assert.strictEqual(mechRes.status, 200);
+    const mechData = JSON.parse(mechRes.body);
+    assert('mechanics' in mechData, 'Mechanics data contains mechanics');
+    assert('overall' in mechData, 'Mechanics data contains overall');
+    assert(Array.isArray(mechData.topCharacters), 'Mechanics data contains topCharacters array');
+    console.log(`  ✔ Mechanics API returned top characters count=${mechData.topCharacters.length}.`);
+
+    // 11. Test API Audit Errors
+    console.log('11. Testing GET /api/audit/errors...');
+    const auditRes = await fetchHttp(`${baseUrl}/api/audit/errors`);
+    assert.strictEqual(auditRes.status, 200);
+    const auditData = JSON.parse(auditRes.body);
+    assert('statusCounts' in auditData, 'Audit data contains statusCounts');
+    assert(Array.isArray(auditData.recentFailures), 'Audit data contains recentFailures array');
+    console.log(`  ✔ Audit Errors API returned statusCounts=${JSON.stringify(auditData.statusCounts)}.`);
+
     console.log('\n=== ALL BROWSER FRONTEND TESTS PASSED ===');
   } finally {
     server.close();
