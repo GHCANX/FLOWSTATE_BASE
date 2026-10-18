@@ -61,7 +61,7 @@ typings/
 .idea/
 
 # Dist
-dist/
+# dist/ (tracked for self-contained execution without build step)
 
 # Mac
 .DS_Store

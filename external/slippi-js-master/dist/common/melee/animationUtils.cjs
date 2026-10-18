@@ -1,0 +1,21 @@
+'use strict';
+
+// eslint-disable-next-line
+function getDeathDirection(actionStateId) {
+    if (actionStateId > 0xa) {
+        return undefined;
+    }
+    switch (actionStateId) {
+        case 0:
+            return "down";
+        case 1:
+            return "left";
+        case 2:
+            return "right";
+        default:
+            return "up";
+    }
+}
+
+exports.getDeathDirection = getDeathDirection;
+//# sourceMappingURL=animationUtils.cjs.map
