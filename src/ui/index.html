@@ -1,0 +1,288 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Flowstate // Melee Replay Analysis Console</title>
+  <link rel="stylesheet" href="styles.css">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+</head>
+<body>
+  <div class="app-container">
+    <!-- Header -->
+    <header class="app-header">
+      <div class="header-left">
+        <span class="logo-icon">⚡</span>
+        <div>
+          <h1 class="app-title">FLOWSTATE</h1>
+          <p class="app-subtitle">Super Smash Bros. Melee Replay Analysis & Ingestion Console</p>
+        </div>
+      </div>
+      <div class="header-right">
+        <div class="status-indicator" id="server-status">
+          <span class="status-dot"></span>
+          <span class="status-text">CONNECTED</span>
+        </div>
+        <a href="https://github.com/GHCANX/FLOWSTATE_BASE" target="_blank" rel="noopener" class="repo-badge">
+          GitHub Repo ↗
+        </a>
+      </div>
+    </header>
+
+    <!-- Main Workspace -->
+    <main class="main-layout">
+      <!-- Left Panel: Command Builder -->
+      <section class="panel builder-panel" aria-labelledby="builder-heading">
+        <div class="panel-header">
+          <h2 id="builder-heading" class="panel-title">Command Builder</h2>
+          <span class="panel-badge">Interactive</span>
+        </div>
+
+        <!-- Navigation Tabs -->
+        <nav class="command-tabs" role="tablist" aria-label="CLI Command Categories">
+          <button class="tab-btn active" role="tab" aria-selected="true" data-tab="matchup">Matchup</button>
+          <button class="tab-btn" role="tab" aria-selected="false" data-tab="batch">Batch Ingestion</button>
+          <button class="tab-btn" role="tab" aria-selected="false" data-tab="player">Player Scout</button>
+          <button class="tab-btn" role="tab" aria-selected="false" data-tab="game">Replay Inspector</button>
+          <button class="tab-btn" role="tab" aria-selected="false" data-tab="overview">Overview</button>
+          <button class="tab-btn" role="tab" aria-selected="false" data-tab="status">Status</button>
+          <button class="tab-btn" role="tab" aria-selected="false" data-tab="export">Export</button>
+          <button class="tab-btn" role="tab" aria-selected="false" data-tab="custom">Custom</button>
+        </nav>
+
+        <!-- Command Form Panels -->
+        <div class="form-container">
+          <!-- 1. Matchup Form -->
+          <form id="form-matchup" class="command-form active" data-command="matchup">
+            <fieldset>
+              <legend>Head-to-Head Matchup Analysis</legend>
+              <p class="form-desc">Compare winrates, legal stage tendencies, and mechanical execution differentials between two characters.</p>
+
+              <div class="character-select-grid">
+                <div class="form-group">
+                  <label for="matchup-charA">Character 1</label>
+                  <select id="matchup-charA" class="form-control" name="charA">
+                    <option value="fox" selected>Fox</option>
+                  </select>
+                </div>
+
+                <button type="button" id="btn-swap-chars" class="swap-btn" title="Swap Characters" aria-label="Swap Characters">
+                  ⇄
+                </button>
+
+                <div class="form-group">
+                  <label for="matchup-charB">Character 2</label>
+                  <select id="matchup-charB" class="form-control" name="charB">
+                    <option value="marth" selected>Marth</option>
+                  </select>
+                </div>
+              </div>
+            </fieldset>
+          </form>
+
+          <!-- 2. Batch Ingestion Form -->
+          <form id="form-batch" class="command-form" data-command="batch">
+            <fieldset>
+              <legend>Sliding-Window Batch Ingestion</legend>
+              <p class="form-desc">Ingests tournament & ranked replays from Lunar Melee API, parses frame data, persists to SQLite, and purges .slp buffer.</p>
+
+              <div class="form-row">
+                <div class="form-group">
+                  <label for="batch-size">Batch Size (<span id="batch-size-val">100</span> replays)</label>
+                  <input type="range" id="batch-size" name="size" min="5" max="200" step="5" value="100" class="range-slider">
+                </div>
+
+                <div class="form-group">
+                  <label for="batch-count">Batch Count</label>
+                  <input type="number" id="batch-count" name="batches" min="1" max="100" value="1" class="form-control">
+                </div>
+              </div>
+
+              <div class="form-row">
+                <div class="form-group">
+                  <label for="batch-run">Run Identifier</label>
+                  <input type="text" id="batch-run" name="run" value="lunar_2018_onwards" class="form-control" placeholder="runName">
+                </div>
+
+                <div class="form-group checkbox-group">
+                  <label class="checkbox-label" for="batch-continuous">
+                    <input type="checkbox" id="batch-continuous" name="continuous">
+                    <span>Continuous Run (Loop until caught up)</span>
+                  </label>
+                </div>
+              </div>
+            </fieldset>
+          </form>
+
+          <!-- 3. Player Scout Form -->
+          <form id="form-player" class="command-form" data-command="player">
+            <fieldset>
+              <legend>Player Tactical Scouting Report</legend>
+              <p class="form-desc">Inspect match history, win rates, IPM, L-cancel execution, and tech-chase habits for a specific player tag.</p>
+
+              <div class="form-group">
+                <label for="player-code">Slippi Connect Code</label>
+                <input type="text" id="player-code" name="code" value="MANG#0" class="form-control" placeholder="TAG#123" required>
+              </div>
+
+              <div class="quick-tags">
+                <span class="quick-tags-label">Quick Suggestions:</span>
+                <button type="button" class="tag-pill" data-fill="MANG#0">MANG#0</button>
+                <button type="button" class="tag-pill" data-fill="IBDW#0">IBDW#0</button>
+                <button type="button" class="tag-pill" data-fill="ZAIN#0">ZAIN#0</button>
+                <button type="button" class="tag-pill" data-fill="HBOX#0">HBOX#0</button>
+                <button type="button" class="tag-pill" data-fill="LEFF#0">LEFF#0</button>
+              </div>
+            </fieldset>
+          </form>
+
+          <!-- 4. Replay Inspector Form -->
+          <form id="form-game" class="command-form" data-command="game">
+            <fieldset>
+              <legend>Deep Replay Inspection</legend>
+              <p class="form-desc">Decompresses and inspects granular match payload (.json.gz): conversions, edgeguard vectors, and shield pressure.</p>
+
+              <div class="form-group">
+                <label for="game-recent-select">Select Ingested Replay</label>
+                <select id="game-recent-select" class="form-control">
+                  <option value="">-- Load recent matches from database --</option>
+                </select>
+              </div>
+
+              <div class="form-group">
+                <label for="game-id">Or Enter Game ID (Hex)</label>
+                <input type="text" id="game-id" name="gameId" class="form-control" placeholder="e.g. 69bea9e55febbbc18f6a6f66">
+              </div>
+            </fieldset>
+          </form>
+
+          <!-- 5. Overview Form -->
+          <form id="form-overview" class="command-form" data-command="overview">
+            <fieldset>
+              <legend>Global Dataset Overview</legend>
+              <p class="form-desc">Queries SQLite catalog for total ingested matches, unique players, date coverage, top characters, and dataset execution benchmarks.</p>
+              <div class="overview-info-box">
+                Ready to execute global database aggregation.
+              </div>
+            </fieldset>
+          </form>
+
+          <!-- 6. Status Form -->
+          <form id="form-status" class="command-form" data-command="status">
+            <fieldset>
+              <legend>Ingestion Checkpoint Status</legend>
+              <p class="form-desc">Inspect active pagination cursor, year, next page, download counts, and failure tracking for a specific ingestion run.</p>
+
+              <div class="form-group">
+                <label for="status-run">Run Identifier</label>
+                <input type="text" id="status-run" name="runName" value="lunar_2018_onwards" class="form-control">
+              </div>
+            </fieldset>
+          </form>
+
+          <!-- 7. Export Form -->
+          <form id="form-export" class="command-form" data-command="export">
+            <fieldset>
+              <legend>Dataset Export</legend>
+              <p class="form-desc">Export the SQLite match catalog to JSON or CSV for external analysis or machine learning workflows.</p>
+
+              <div class="form-group">
+                <label>Export Format</label>
+                <div class="radio-group">
+                  <label class="radio-label">
+                    <input type="radio" name="format" value="json" checked>
+                    <span>JSON Array</span>
+                  </label>
+                  <label class="radio-label">
+                    <input type="radio" name="format" value="csv">
+                    <span>CSV Spreadsheet</span>
+                  </label>
+                </div>
+              </div>
+
+              <div class="form-group">
+                <label for="export-out">Output File Path (Optional)</label>
+                <input type="text" id="export-out" name="out" class="form-control" placeholder="e.g. ./export.csv (blank prints to terminal)">
+              </div>
+            </fieldset>
+          </form>
+
+          <!-- 8. Custom Form -->
+          <form id="form-custom" class="command-form" data-command="custom">
+            <fieldset>
+              <legend>Custom CLI Command</legend>
+              <p class="form-desc">Type arbitrary arguments to execute directly with node src/cli.js.</p>
+
+              <div class="form-group">
+                <label for="custom-args">Arguments</label>
+                <input type="text" id="custom-args" class="form-control" placeholder="e.g. matchup falco captainfalcon">
+              </div>
+            </fieldset>
+          </form>
+        </div>
+
+        <!-- Live Reactive Command Preview -->
+        <div class="command-preview-box">
+          <div class="preview-header">
+            <span class="preview-label">LIVE COMMAND PREVIEW</span>
+            <button type="button" id="btn-copy-command" class="btn-secondary btn-sm" title="Copy to clipboard">
+              Copy Command 📋
+            </button>
+          </div>
+          <pre class="preview-code"><code id="command-preview-text">node src/cli.js matchup fox marth</code></pre>
+          
+          <div class="execute-actions">
+            <button type="button" id="btn-execute" class="btn-primary btn-large">
+              <span class="btn-icon">▶</span> Run Command
+            </button>
+          </div>
+        </div>
+      </section>
+
+      <!-- Right Panel: Terminal Output Viewer -->
+      <section class="panel terminal-panel" aria-labelledby="terminal-heading">
+        <div class="panel-header terminal-header">
+          <div class="terminal-title-group">
+            <h2 id="terminal-heading" class="panel-title">Execution Console</h2>
+            <div id="execution-badge" class="badge-status idle">
+              <span class="badge-dot"></span>
+              <span id="badge-text">IDLE</span>
+            </div>
+            <span id="execution-timer" class="timer-display">00:00.0</span>
+          </div>
+
+          <div class="terminal-actions">
+            <button type="button" id="btn-abort" class="btn-danger btn-sm" disabled title="Cancel running command (SIGINT)">
+              ■ Abort
+            </button>
+            <button type="button" id="btn-clear-term" class="btn-secondary btn-sm" title="Clear console output">
+              Clear
+            </button>
+            <button type="button" id="btn-copy-output" class="btn-secondary btn-sm" title="Copy console logs to clipboard">
+              Copy Output 📋
+            </button>
+          </div>
+        </div>
+
+        <!-- Terminal Output Area -->
+        <div class="terminal-viewport" id="terminal-viewport">
+          <div id="terminal-output" class="terminal-output" role="log" aria-live="polite">
+<span class="t-dim">===============================================================</span>
+<span class="t-cyan">⚡ Flowstate Melee Analysis Engine // Web Console v1.0 ⚡</span>
+<span class="t-dim">Select a command category above and click [Run Command] to execute.</span>
+<span class="t-dim">Output from stdout and stderr will stream here in real-time.</span>
+<span class="t-dim">===============================================================</span>
+</div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <!-- Toast Notification Container -->
+  <div id="toast" class="toast hidden" role="status" aria-live="assertive"></div>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>

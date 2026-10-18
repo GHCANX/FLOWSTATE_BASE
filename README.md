@@ -80,13 +80,37 @@ This tests:
 2. Compressed payload creation and on-the-fly decompression.
 3. SQLite transactional ingestion and analytics queries.
 
+## 🌐 Browser UI Console
+
+Flowstate includes an interactive browser-based frontend for building, previewing, and executing CLI commands:
+
+```bash
+# Start the web UI on http://localhost:3000
+npm run ui
+
+# Or specify a custom port
+node src/cli.js serve --port=8080
+```
+
+- **Interactive Command Builder**: Form controls with character dropdowns (26 Melee characters), batch sliders, continuous toggles, export format selectors, and recent replay selectors.
+- **Live Command Preview**: Reactive command string preview box with 1-click clipboard copy.
+- **Embedded Streaming Console**: Real-time ANSI colored terminal output streaming from the CLI process via Server-Sent Events (SSE).
+- **Process Lifecycle & Abort**: Real-time timer and graceful `SIGINT` abort button.
+
 ---
 
 ## 💻 CLI Commands
 
 The engine provides a unified CLI via `npm run cli -- <command>` (or `node src/cli.js <command>`):
 
-### 1. Global Dataset Overview
+### 1. Web UI Server
+Launch the interactive web console:
+```bash
+npm run ui
+# or: npm run cli -- serve
+```
+
+### 2. Global Dataset Overview
 Display overall game counts, unique players, date coverage, top characters, and mechanical averages:
 ```bash
 npm run cli -- overview

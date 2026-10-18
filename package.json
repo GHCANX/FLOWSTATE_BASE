@@ -4,8 +4,10 @@
   "description": "High-throughput Melee .slp replay analysis engine, SQLite catalog, and Lunar Melee batch pipeline",
   "type": "module",
   "scripts": {
-    "test": "node test/stage1_local_test.js",
-    "cli": "node src/cli.js"
+    "test": "node test/stage1_local_test.js && node test/server_test.js",
+    "cli": "node src/cli.js",
+    "ui": "node src/cli.js serve",
+    "serve": "node src/cli.js serve"
   },
   "dependencies": {
     "@slippi/slippi-js": "file:./external/slippi-js-master"

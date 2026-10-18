@@ -243,12 +243,24 @@ async function main() {
       break;
     }
 
+    case 'serve':
+    case 'ui': {
+      const port = parseInt(args.find(a => a.startsWith('--port='))?.split('=')[1] || '3000', 10);
+      const host = args.find(a => a.startsWith('--host='))?.split('=')[1] || '0.0.0.0';
+      const { startServer } = await import('./server/server.js');
+      await startServer({ port, host });
+      return;
+    }
+
     case 'help':
     default: {
       console.log(`
 FlowState Melee Analysis Engine CLI
 
 Commands:
+  node src/cli.js serve [--port=3000]
+      Launches the interactive browser frontend for the Flowstate CLI.
+
   node src/cli.js batch [--size=100] [--batches=1] [--continuous] [--run=runName]
       Runs the rate-limited sliding-window batch ingestion pipeline from Lunar Melee.
       Downloads replays, parses them, writes to SQLite + gzip JSON, and purges raw .slp files.
