@@ -193,9 +193,9 @@ export function createServer() {
       sendEvent('start', { command: activeCommandStr });
 
       const cliPath = path.resolve(__dirname, '../cli.js');
-      const child = spawn(process.execPath, [cliPath, ...args], {
+      const child = spawn(process.execPath, ['--no-warnings', cliPath, ...args], {
         cwd: process.cwd(),
-        env: { ...process.env, FORCE_COLOR: '1' },
+        env: { ...process.env, FORCE_COLOR: '1', NODE_NO_WARNINGS: '1' },
       });
 
       activeProcess = child;
@@ -205,7 +205,16 @@ export function createServer() {
       });
 
       child.stderr.on('data', chunk => {
-        sendEvent('stderr', { text: chunk.toString('utf8') });
+        const text = chunk.toString('utf8');
+        // Filter out benign V8 asm.js enet warnings that pollute stderr
+        const lines = text.split('\n').filter(line => {
+          const l = line.trim();
+          return !l.includes('Invalid asm.js') && !l.includes('--trace-warnings') && !l.includes('enet.js:11');
+        });
+        const cleaned = lines.join('\n').trim();
+        if (cleaned) {
+          sendEvent('stderr', { text: cleaned + '\n' });
+        }
       });
 
       child.on('error', err => {
