@@ -137,6 +137,9 @@ To prevent SQLite table explosion across hundreds of thousands of games:
 2. **Date-Sharded Compressed Payloads (`payloads/YYYY/MM/<id>.json.gz`)**: Store granular frame-by-frame conversions, shield pressure sequences, and phantom hit events.
 3. Level 6 `gzipSync` achieves ~88% space reduction (~2.5KB per game), enabling multi-million game storage on commodity disks.
 
+### 6. Vendored Precompiled Distributions & Git Hygiene
+When vendoring `@slippi/slippi-js` from source in `external/slippi-js-master`, ensure the precompiled `dist/node/index.esm.js` bundle is tracked in Git. Check upstream `.gitignore` files to ensure `dist/` is not excluded, avoiding runtime `ERR_MODULE_NOT_FOUND` errors on fresh clones.
+
 ---
 
 ## 3. External API Interoperability (Lunar Melee)
@@ -155,4 +158,23 @@ The Lunar Melee API (`https://api.lunarmelee.com`) provides bulk tournament and 
 - Ingestion pipelines must enforce $\le 24\text{ req/min}$ (one download per 2500ms sliding window).
 - Handle HTTP 429 and 503 responses with exponential backoff and jitter.
 - Maintain an `ingestion_progress` table in SQLite to track pagination cursors (`year`, `page`, `pageSize`, `total_processed`).
+
+---
+
+## 4. Browser Frontend & Streaming Execution
+
+Flowstate provides a zero-dependency web UI (`src/ui/`) served by `src/server/server.js` using native `node:http`.
+
+### Starting the Server
+```bash
+npm run ui          # Launches on port 3000
+npm run serve       # Alias for ui
+node src/cli.js serve --port=8080  # Custom port
+```
+
+### Server Architecture & Streaming Protocol
+- **Endpoint `/api/execute`**: Executes CLI subcommands via `child_process.spawn` with `--no-warnings` and `FORCE_COLOR: '1'`.
+- **Server-Sent Events (SSE)**: Streams `stdout` and `stderr` chunks formatted with ANSI escape sequences to the browser terminal in real time.
+- **Process Abort (`/api/abort`)**: Dispatches `SIGINT` to the running child process with a fallback `SIGKILL` timer.
+- **Advisory Filtering**: The server filters out `Invalid asm.js` warnings from the stderr stream to maintain clean output in the frontend log viewer.
 
