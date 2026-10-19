@@ -14,6 +14,12 @@ temp_slp/*
 test_payloads/
 test_analytics.db*
 
+# Local credentials and auth data
+data/
+*credentials.json
+.env
+.env.local
+
 # OS and Editor artifacts
 .DS_Store
 Thumbs.db

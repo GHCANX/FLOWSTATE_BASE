@@ -1,0 +1,138 @@
+{
+  "title": "FlowState Melee Sprite & Move Animation Catalog",
+  "version": "1.0.0",
+  "source": "FightCore / Melee HD / Frame Grabber Spec",
+  "cdnBase": "https://i.fightcore.gg/beta/",
+  "characters": {
+    "fox": {
+      "moves": {
+        "shine": {
+          "name": "Reflector (Shine)",
+          "move": "downb",
+          "url": "/assets/sprites/fox/shine.gif",
+          "remoteUrl": "https://i.fightcore.gg/beta/fox/downb.gif"
+        },
+        "usmash": {
+          "name": "Up Smash",
+          "move": "usmash",
+          "url": "/assets/sprites/fox/usmash.gif",
+          "remoteUrl": "https://i.fightcore.gg/beta/fox/usmash.gif"
+        },
+        "dair": {
+          "name": "Down Aerial (Drill)",
+          "move": "dair",
+          "url": "/assets/sprites/fox/dair.gif",
+          "remoteUrl": "https://i.fightcore.gg/beta/fox/dair.gif"
+        },
+        "blaster": {
+          "name": "Blaster",
+          "move": "neutralb",
+          "url": "/assets/sprites/fox/blaster.gif",
+          "remoteUrl": "https://i.fightcore.gg/beta/fox/neutralb.gif"
+        }
+      }
+    },
+    "falco": {
+      "moves": {
+        "dair": {
+          "name": "Down Aerial (Pillared Dair)",
+          "move": "dair",
+          "url": "/assets/sprites/falco/dair.gif",
+          "remoteUrl": "https://i.fightcore.gg/beta/falco/dair.gif"
+        },
+        "laser": {
+          "name": "Blaster (Laser)",
+          "move": "neutralb",
+          "url": "/assets/sprites/falco/laser.gif",
+          "remoteUrl": "https://i.fightcore.gg/beta/falco/neutralb.gif"
+        },
+        "shine": {
+          "name": "Reflector (Shine)",
+          "move": "downb",
+          "url": "/assets/sprites/falco/shine.gif",
+          "remoteUrl": "https://i.fightcore.gg/beta/falco/downb.gif"
+        }
+      }
+    },
+    "marth": {
+      "moves": {
+        "fair": {
+          "name": "Forward Aerial (Ken Combo Fair)",
+          "move": "fair",
+          "url": "/assets/sprites/marth/fair.gif",
+          "remoteUrl": "https://i.fightcore.gg/beta/marth/fair.gif"
+        },
+        "fsmash": {
+          "name": "Forward Smash (Tipper)",
+          "move": "fsmash",
+          "url": "/assets/sprites/marth/fsmash.gif",
+          "remoteUrl": "https://i.fightcore.gg/beta/marth/fsmash.gif"
+        },
+        "dtilt": {
+          "name": "DTILT",
+          "move": "dtilt",
+          "url": "/assets/sprites/marth/dtilt.gif",
+          "remoteUrl": "https://i.fightcore.gg/beta/marth/dtilt.gif"
+        }
+      }
+    },
+    "sheik": {
+      "moves": {
+        "fair": {
+          "name": "Forward Aerial (Needle Fair)",
+          "move": "fair",
+          "url": "/assets/sprites/sheik/fair.gif",
+          "remoteUrl": "https://i.fightcore.gg/beta/sheik/fair.gif"
+        },
+        "needles": {
+          "name": "Needle Storm",
+          "move": "neutralb",
+          "url": "/assets/sprites/sheik/needles.gif",
+          "remoteUrl": "https://i.fightcore.gg/beta/sheik/neutralb.gif"
+        }
+      }
+    },
+    "captainfalcon": {
+      "moves": {
+        "knee": {
+          "name": "Forward Aerial (The Knee)",
+          "move": "fair",
+          "url": "/assets/sprites/captainfalcon/knee.gif",
+          "remoteUrl": "https://i.fightcore.gg/beta/captainfalcon/fair.gif"
+        },
+        "falcon_punch": {
+          "name": "Falcon Punch",
+          "move": "neutralb",
+          "url": "/assets/sprites/captainfalcon/falcon_punch.gif",
+          "remoteUrl": "https://i.fightcore.gg/beta/captainfalcon/neutralb.gif"
+        }
+      }
+    },
+    "peach": {
+      "moves": {
+        "turnip": {
+          "name": "Vegetable (Turnip Pull)",
+          "move": "downb",
+          "url": "/assets/sprites/peach/turnip.gif",
+          "remoteUrl": "https://i.fightcore.gg/beta/peach/downb.gif"
+        }
+      }
+    },
+    "jigglypuff": {
+      "moves": {
+        "rest": {
+          "name": "Rest",
+          "move": "downb",
+          "url": "/assets/sprites/jigglypuff/rest.gif",
+          "remoteUrl": "https://i.fightcore.gg/beta/jigglypuff/downb.gif"
+        },
+        "bair": {
+          "name": "Back Aerial (Wall of Pain)",
+          "move": "bair",
+          "url": "/assets/sprites/jigglypuff/bair.gif",
+          "remoteUrl": "https://i.fightcore.gg/beta/jigglypuff/bair.gif"
+        }
+      }
+    }
+  }
+}

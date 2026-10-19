@@ -169,6 +169,29 @@ async function runServerTests() {
     assert.strictEqual(footprintData.tempSlpZero, true, 'Zero accumulation rule: tempSlpZero must be true');
     console.log(`  ✔ Storage Footprint API returned payloadFiles=${footprintData.payloadStorage.fileCount}, tempSlpZero=${footprintData.tempSlpZero}.`);
 
+    // 14. Test API Sprite Manifest
+    console.log('14. Testing GET /api/sprites/manifest...');
+    const manifestRes = await fetchHttp(`${baseUrl}/api/sprites/manifest`);
+    assert.strictEqual(manifestRes.status, 200);
+    const manifestData = JSON.parse(manifestRes.body);
+    assert(manifestData.characters, 'Sprite manifest contains characters dictionary');
+    assert(manifestData.characters.fox, 'Sprite manifest contains fox');
+    console.log(`  ✔ Sprite Manifest API returned ${Object.keys(manifestData.characters).length} characters.`);
+
+    // 15. Test Sprite Dynamic Endpoint
+    console.log('15. Testing GET /api/sprites/fox/shine...');
+    const spriteRes = await fetchHttp(`${baseUrl}/api/sprites/fox/shine`);
+    assert.strictEqual(spriteRes.status, 200);
+    assert.strictEqual(spriteRes.headers['content-type'], 'image/gif');
+    console.log(`  ✔ Dynamic Sprite API returned image/gif successfully.`);
+
+    // 16. Test Static Sprite Asset
+    console.log('16. Testing GET /assets/sprites/fox/shine.gif...');
+    const staticSpriteRes = await fetchHttp(`${baseUrl}/assets/sprites/fox/shine.gif`);
+    assert.strictEqual(staticSpriteRes.status, 200);
+    assert.strictEqual(staticSpriteRes.headers['content-type'], 'image/gif');
+    console.log(`  ✔ Static Sprite Asset served with image/gif correctly.`);
+
     console.log('\n=== ALL BROWSER FRONTEND TESTS PASSED ===');
   } finally {
     server.close();

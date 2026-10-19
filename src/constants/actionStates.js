@@ -97,6 +97,15 @@ export const ACTION_STATES = {
   SHINE_END: 368,
 };
 
+export {
+  CHARACTER_SPECIAL_ACTION_STATES,
+  getSpecialMoveIdent,
+  isCharacterSpecial,
+  isRecoverySpecial,
+  isProjectileSpecial,
+  isReflectorSpecial,
+} from './specialActionStates.js';
+
 export function isDamage(state) {
   return (state >= ACTION_STATES.DAMAGE_START && state <= ACTION_STATES.DAMAGE_END) || state === ACTION_STATES.DAMAGE_FALL;
 }
@@ -134,11 +143,23 @@ export function isWakeup(state) {
          (state >= ACTION_STATES.DOWN_STAND_D && state <= ACTION_STATES.DOWN_ATTACK_D);
 }
 
-export function isAttack(state) {
-  return (state >= 0x2C && state <= 0x45) || state >= 341;
+export function isAttack(state, characterId = null) {
+  if (state >= 0x2C && state <= 0x45) return true;
+  if (state >= 341) {
+    if (characterId !== null) {
+      // If characterId is provided, check if it is a known special or unique attack
+      return true;
+    }
+    return true;
+  }
+  return false;
 }
 
-export function isShine(state) {
+export function isShine(state, characterId = null) {
+  if (characterId !== null && characterId !== 2 && characterId !== 20) {
+    // Shines only exist for Fox (2) and Falco (20)
+    return false;
+  }
   return state >= ACTION_STATES.SHINE_START && state <= ACTION_STATES.SHINE_END;
 }
 
