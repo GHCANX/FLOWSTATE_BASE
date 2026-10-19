@@ -8,6 +8,7 @@ import { getDatabase, closeDatabase } from '../database/db.js';
 import { getStageName } from '../constants/stageGeometry.js';
 import { AnalyticsService } from '../query/analyticsService.js';
 import { getBroadcastService } from '../broadcast/broadcastService.js';
+import { fetchSprite } from '../../scripts/fetchSprites.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -23,6 +24,7 @@ const MIME_TYPES = {
   '.json': 'application/json; charset=utf-8',
   '.svg': 'image/svg+xml',
   '.png': 'image/png',
+  '.gif': 'image/gif',
   '.ico': 'image/x-icon',
   '.jpg': 'image/jpeg',
   '.jpeg': 'image/jpeg',
@@ -86,7 +88,39 @@ export function createServer(options = {}) {
 
     // 1. API Routes
 
-    // Broadcast Spectator Session & SSE Routes
+    // Broadcast Slippi Auth Routes
+    if (pathname === '/api/broadcast/auth/login' && req.method === 'POST') {
+      try {
+        const body = await parseJsonBody(req);
+        const result = await broadcast.auth.login(body.email, body.password);
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(result));
+      } catch (err) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: err.message }));
+      }
+      return;
+    }
+
+    if (pathname === '/api/broadcast/auth/logout' && req.method === 'POST') {
+      try {
+        const result = broadcast.auth.logout();
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(result));
+      } catch (err) {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: err.message }));
+      }
+      return;
+    }
+
+    if (pathname === '/api/broadcast/auth/status' && req.method === 'GET') {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(broadcast.auth.getCredentialsSummary()));
+      return;
+    }
+
+    // Broadcast Spectator Session Routes
     if (pathname === '/api/broadcast/session' && req.method === 'POST') {
       try {
         const body = await parseJsonBody(req);
@@ -118,6 +152,19 @@ export function createServer(options = {}) {
       return;
     }
 
+    if (pathname === '/api/broadcast/watch' && req.method === 'POST') {
+      try {
+        const body = await parseJsonBody(req);
+        broadcast.watchBroadcast(body.broadcastId);
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: true, watching: body.broadcastId }));
+      } catch (err) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: err.message }));
+      }
+      return;
+    }
+
     if (pathname === '/api/broadcast/events' && req.method === 'GET') {
       res.writeHead(200, {
         'Content-Type': 'text/event-stream',
@@ -139,17 +186,26 @@ export function createServer(options = {}) {
       sendEvent('session', broadcast.getSession());
 
       const onStatusChange = (state) => sendEvent('statusChange', state);
+      const onBroadcastsUpdated = (broadcasts) => sendEvent('broadcastsUpdated', broadcasts);
       const onGameStart = (game) => sendEvent('gameStart', game);
       const onGameEnd = (end) => sendEvent('gameEnd', end);
+      const onArchiveComplete = (data) => sendEvent('archiveComplete', data);
+      const onArchiveError = (data) => sendEvent('archiveError', data);
 
       broadcast.on('statusChange', onStatusChange);
+      broadcast.on('broadcastsUpdated', onBroadcastsUpdated);
       broadcast.on('gameStart', onGameStart);
       broadcast.on('gameEnd', onGameEnd);
+      broadcast.on('archiveComplete', onArchiveComplete);
+      broadcast.on('archiveError', onArchiveError);
 
       req.on('close', () => {
         broadcast.off('statusChange', onStatusChange);
+        broadcast.off('broadcastsUpdated', onBroadcastsUpdated);
         broadcast.off('gameStart', onGameStart);
         broadcast.off('gameEnd', onGameEnd);
+        broadcast.off('archiveComplete', onArchiveComplete);
+        broadcast.off('archiveError', onArchiveError);
       });
       return;
     }
@@ -481,6 +537,47 @@ export function createServer(options = {}) {
         res.end(JSON.stringify({ error: err.message }));
       }
       return;
+    }
+
+    // Sprites Manifest
+    if (pathname === '/api/sprites/manifest' && req.method === 'GET') {
+      const manifestPath = path.join(UI_DIR, 'assets', 'sprites', 'manifest.json');
+      if (fs.existsSync(manifestPath)) {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        fs.createReadStream(manifestPath).pipe(res);
+      } else {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ characters: {} }));
+      }
+      return;
+    }
+
+    // Dynamic Sprite Endpoint with On-Demand Cache
+    if (pathname.startsWith('/api/sprites/') && req.method === 'GET') {
+      const parts = pathname.slice('/api/sprites/'.length).split('/');
+      if (parts.length >= 2) {
+        const char = parts[0].toLowerCase();
+        const move = parts[1].replace(/\.gif$/i, '').toLowerCase();
+        const localPath = path.join(UI_DIR, 'assets', 'sprites', char, `${move}.gif`);
+
+        if (fs.existsSync(localPath)) {
+          res.writeHead(200, { 'Content-Type': 'image/gif', 'Cache-Control': 'public, max-age=31536000' });
+          fs.createReadStream(localPath).pipe(res);
+          return;
+        }
+
+        // On-demand fetch from FightCore CDN
+        fetchSprite(char, move)
+          .then(downloadedPath => {
+            res.writeHead(200, { 'Content-Type': 'image/gif', 'Cache-Control': 'public, max-age=31536000' });
+            fs.createReadStream(downloadedPath).pipe(res);
+          })
+          .catch(err => {
+            res.writeHead(404, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: err.message }));
+          });
+        return;
+      }
     }
 
     if (pathname === '/api/abort' && req.method === 'POST') {

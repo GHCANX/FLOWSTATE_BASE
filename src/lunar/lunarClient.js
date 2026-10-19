@@ -134,4 +134,46 @@ export class LunarClient {
     fs.writeFileSync(destinationFilePath, buffer);
     return destinationFilePath;
   }
+
+  /**
+   * Upload a raw .slp file or buffer to Lunar Melee Upload API
+   * @param {string|Buffer} filePathOrBuffer
+   * @param {Object} [options]
+   * @param {boolean} [options.sandbox=false]
+   * @returns {Promise<Object>}
+   */
+  async uploadReplay(filePathOrBuffer, { sandbox = false } = {}) {
+    let buffer;
+    if (Buffer.isBuffer(filePathOrBuffer)) {
+      buffer = filePathOrBuffer;
+    } else if (typeof filePathOrBuffer === 'string') {
+      if (!fs.existsSync(filePathOrBuffer)) {
+        throw new Error(`File does not exist: ${filePathOrBuffer}`);
+      }
+      buffer = fs.readFileSync(filePathOrBuffer);
+    } else {
+      throw new Error('Invalid input: expected file path or Buffer');
+    }
+
+    const endpoint = sandbox ? `${this.baseUrl}/api/uploads/sandbox` : `${this.baseUrl}/api/uploads`;
+    const res = await this._request(endpoint, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/octet-stream',
+      },
+      body: buffer,
+    });
+
+    if (!res.ok) {
+      const errText = await res.text();
+      throw new Error(`Upload failed (${res.status}): ${errText}`);
+    }
+
+    try {
+      return await res.json();
+    } catch (_) {
+      return { success: true, status: res.status };
+    }
+  }
 }
+

@@ -293,6 +293,20 @@ async function main() {
       return;
     }
 
+    case 'sprites': {
+      const char = args[1] || 'fox';
+      const move = args[2] || 'shine';
+      const { fetchSprite } = await import('../scripts/fetchSprites.js');
+      console.log(`⚡ Resolving sprite for ${char} (${move})...`);
+      try {
+        const filePath = await fetchSprite(char, move);
+        console.log(`✔ Sprite available at: ${filePath}`);
+      } catch (err) {
+        console.error(`✖ Failed to fetch sprite: ${err.message}`);
+      }
+      break;
+    }
+
     case 'help':
     default: {
       console.log(`

@@ -38,7 +38,26 @@ const broadcastKeyVal = document.getElementById('broadcast-key-val');
 const btnCopyBroadcastKey = document.getElementById('btn-copy-broadcast-key');
 const btnStartSpectator = document.getElementById('btn-start-spectator');
 const btnStopSpectator = document.getElementById('btn-stop-spectator');
-const inputSpectatorPort = document.getElementById('spectator-port');
+const chkAutoArchive = document.getElementById('chk-auto-archive');
+const chkLunarUpload = document.getElementById('chk-lunar-upload');
+
+// Slippi Account Elements
+const slippiAccountBadge = document.getElementById('slippi-account-badge');
+const slippiAccountStatus = document.getElementById('slippi-account-status');
+const slippiLoginSection = document.getElementById('slippi-login-section');
+const slippiProfileSection = document.getElementById('slippi-profile-section');
+const slippiEmailInput = document.getElementById('slippi-email');
+const slippiPasswordInput = document.getElementById('slippi-password');
+const btnSlippiLogin = document.getElementById('btn-slippi-login');
+const btnSlippiLogout = document.getElementById('btn-slippi-logout');
+const slippiDisplayName = document.getElementById('slippi-display-name');
+const slippiConnectCode = document.getElementById('slippi-connect-code');
+
+// Broadcasters List Elements
+const broadcastersCard = document.getElementById('broadcasters-card');
+const broadcastersList = document.getElementById('broadcasters-list');
+const broadcastersCount = document.getElementById('broadcasters-count');
+
 
 const dashboardPanel = document.getElementById('dashboard-panel');
 const liveMatchPanel = document.getElementById('live-match-panel');
@@ -447,8 +466,13 @@ function getActiveCommandArgs() {
     }
 
     case 'spectate': {
-      const port = inputSpectatorPort?.value || '51441';
-      return ['spectate', `--port=${port}`];
+      return ['spectate'];
+    }
+
+    case 'sprites': {
+      const char = document.getElementById('sprites-char-select')?.value || 'fox';
+      const move = document.getElementById('sprites-move-select')?.value || 'shine';
+      return ['sprites', char, move];
     }
 
     default:
@@ -923,16 +947,16 @@ async function executeCommand() {
 
   if (currentTab === 'spectate') {
     terminalOutput.innerHTML = '';
-    const port = inputSpectatorPort?.value || '51441';
-    appendTerminalText(`\x1b[36m$ node src/cli.js spectate --port=${port}\x1b[0m\n\n`);
+    appendTerminalText(`\x1b[36m$ node src/cli.js spectate\x1b[0m\n\n`);
     if (trayState === 'min') {
       setTrayState('default');
     }
-    appendTerminalText(`\x1b[90mStarting live Slippi spectator session on port ${port}...\x1b[0m\n`);
+    appendTerminalText(`\x1b[90mConnecting to Slippi Cloud Broadcast Relay...\x1b[0m\n`);
     try {
       await startSpectatorSession();
-      appendTerminalText(`\x1b[32m✔ Spectator session listening! Broadcast Key: ${spectatorSessionState.broadcastKey || 'active'}\x1b[0m\n`);
-      appendTerminalText(`\x1b[90mInstructions: Open Slippi Launcher → Gameplay Broadcasts → Paste Broadcast Key → Start\x1b[0m\n`);
+      const specId = spectatorSessionState.spectatorId || spectatorSessionState.broadcastKey || 'active';
+      appendTerminalText(`\x1b[32m✔ Cloud spectator session active! Spectator ID: ${specId}\x1b[0m\n`);
+      appendTerminalText(`\x1b[90mInstructions: Open Slippi Launcher → Gameplay Broadcasts → Add Spectator ID → Start\x1b[0m\n`);
     } catch (err) {
       appendTerminalText(`\x1b[31m✖ Failed to start spectator session: ${err.message}\x1b[0m\n`);
     }
@@ -1332,41 +1356,180 @@ function getStageDetails(stageId, rawName = '') {
 let spectatorSessionState = {
   status: 'IDLE',
   broadcastKey: null,
-  port: 51441,
-  remotePeer: null,
+  spectatorId: null,
+  account: null,
+  activeBroadcasts: [],
+  currentBroadcastId: null,
+  currentBroadcaster: null,
   currentGame: null,
 };
 
 let broadcastEventSource = null;
 let broadcastPollTimer = null;
 
+function updateSlippiAuthUI(account) {
+  if (account && account.authenticated) {
+    if (slippiLoginSection) slippiLoginSection.classList.add('hidden');
+    if (slippiProfileSection) slippiProfileSection.classList.remove('hidden');
+    if (slippiAccountStatus) slippiAccountStatus.textContent = 'CONNECTED';
+    if (slippiAccountBadge) slippiAccountBadge.className = 'badge-status connected';
+    if (slippiDisplayName) slippiDisplayName.textContent = account.displayName || account.email || 'Slippi User';
+    if (slippiConnectCode) slippiConnectCode.textContent = account.connectCode || '';
+    if (broadcastKeyVal) broadcastKeyVal.textContent = account.uid || 'NO SPECTATOR ID';
+    if (btnCopyBroadcastKey) btnCopyBroadcastKey.disabled = !account.uid;
+  } else {
+    if (slippiLoginSection) slippiLoginSection.classList.remove('hidden');
+    if (slippiProfileSection) slippiProfileSection.classList.add('hidden');
+    if (slippiAccountStatus) slippiAccountStatus.textContent = 'NOT CONNECTED';
+    if (slippiAccountBadge) slippiAccountBadge.className = 'badge-status idle';
+    if (broadcastKeyVal) broadcastKeyVal.textContent = 'PLEASE SIGN IN';
+    if (btnCopyBroadcastKey) btnCopyBroadcastKey.disabled = true;
+  }
+}
+
+function renderBroadcastersList(broadcasts = []) {
+  if (!broadcastersCard || !broadcastersList) return;
+  if (!broadcasts || broadcasts.length === 0) {
+    broadcastersCard.classList.add('hidden');
+    return;
+  }
+
+  broadcastersCard.classList.remove('hidden');
+  if (broadcastersCount) broadcastersCount.textContent = String(broadcasts.length);
+
+  broadcastersList.innerHTML = '';
+  for (const b of broadcasts) {
+    const item = document.createElement('div');
+    const isCurrent = b.broadcastId === spectatorSessionState.currentBroadcastId;
+    item.className = `broadcaster-item ${isCurrent ? 'active' : ''}`;
+
+    const info = document.createElement('div');
+    info.className = 'broadcaster-info';
+
+    const tag = document.createElement('span');
+    tag.className = 'broadcaster-tag';
+    tag.textContent = b.broadcaster?.displayName || 'Player';
+
+    const code = document.createElement('span');
+    code.className = 'broadcaster-code';
+    code.textContent = b.broadcaster?.connectCode ? `(${b.broadcaster.connectCode})` : '';
+
+    info.appendChild(tag);
+    if (b.broadcaster?.connectCode) info.appendChild(code);
+
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = `btn-secondary btn-xs ${isCurrent ? 'btn-active' : ''}`;
+    btn.textContent = isCurrent ? 'Watching ✓' : 'Watch Stream 👁';
+    btn.disabled = isCurrent;
+    btn.addEventListener('click', () => watchBroadcast(b.broadcastId));
+
+    item.appendChild(info);
+    item.appendChild(btn);
+    broadcastersList.appendChild(item);
+  }
+}
+
+async function watchBroadcast(broadcastId) {
+  try {
+    const res = await fetch('/api/broadcast/watch', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ broadcastId }),
+    });
+    if (res.ok) {
+      spectatorSessionState.currentBroadcastId = broadcastId;
+      renderBroadcastersList(spectatorSessionState.activeBroadcasts);
+      showToast('Switched to incoming stream! 📺');
+    }
+  } catch (err) {
+    showToast(`Failed to switch stream: ${err.message}`);
+  }
+}
+
+async function loginSlippiAccount() {
+  const email = slippiEmailInput?.value?.trim();
+  const password = slippiPasswordInput?.value;
+  if (!email || !password) {
+    showToast('Please enter Slippi email and password.');
+    return;
+  }
+
+  if (btnSlippiLogin) btnSlippiLogin.disabled = true;
+  try {
+    const res = await fetch('/api/broadcast/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, password }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      throw new Error(data.error || 'Login failed');
+    }
+    updateSlippiAuthUI(data);
+    showToast(`Logged into Slippi as ${data.displayName || data.email}! 🎉`);
+  } catch (err) {
+    showToast(`Slippi Auth Error: ${err.message}`);
+  } finally {
+    if (btnSlippiLogin) btnSlippiLogin.disabled = false;
+  }
+}
+
+async function logoutSlippiAccount() {
+  if (btnSlippiLogout) btnSlippiLogout.disabled = true;
+  try {
+    await fetch('/api/broadcast/auth/logout', { method: 'POST' });
+    if (slippiPasswordInput) slippiPasswordInput.value = '';
+    updateSlippiAuthUI({ authenticated: false });
+    showToast('Signed out of Slippi.');
+  } catch (err) {
+    showToast(`Logout error: ${err.message}`);
+  } finally {
+    if (btnSlippiLogout) btnSlippiLogout.disabled = false;
+  }
+}
+
 function updateSpectatorUI(session) {
   if (!session) return;
   spectatorSessionState = { ...spectatorSessionState, ...session };
-  const { status, broadcastKey } = spectatorSessionState;
+  const { status, spectatorId, broadcastKey, account, activeBroadcasts } = spectatorSessionState;
   const statusStr = (status || 'IDLE').toUpperCase();
 
-  // 1. Status badge in Left Panel
+  // 1. Account Info
+  if (account) {
+    updateSlippiAuthUI(account);
+  }
+
+  // 2. Status badge in Left Panel
   if (spectatorStatusText) spectatorStatusText.textContent = statusStr;
   if (spectatorStatusBadge) {
     spectatorStatusBadge.className = `badge-status ${statusStr.toLowerCase()}`;
   }
 
-  // 2. Broadcast Key display
+  // 3. Spectator ID display
+  const effectiveKey = spectatorId || broadcastKey || account?.uid;
   if (broadcastKeyVal) {
-    if (broadcastKey) {
-      broadcastKeyVal.textContent = broadcastKey;
+    if (effectiveKey && effectiveKey !== 'NO ACTIVE SESSION') {
+      broadcastKeyVal.textContent = effectiveKey;
+      if (btnCopyBroadcastKey) btnCopyBroadcastKey.disabled = false;
+    } else if (account?.authenticated) {
+      broadcastKeyVal.textContent = account.uid || 'NO SPECTATOR ID';
+      if (btnCopyBroadcastKey) btnCopyBroadcastKey.disabled = false;
     } else {
-      broadcastKeyVal.textContent = 'NO ACTIVE SESSION';
+      broadcastKeyVal.textContent = 'PLEASE SIGN IN';
+      if (btnCopyBroadcastKey) btnCopyBroadcastKey.disabled = true;
     }
   }
 
-  // 3. Action buttons
+  // 4. Action buttons
   const isListeningOrActive = statusStr !== 'IDLE';
   if (btnStartSpectator) btnStartSpectator.disabled = isListeningOrActive;
   if (btnStopSpectator) btnStopSpectator.disabled = !isListeningOrActive;
-  if (btnCopyBroadcastKey) btnCopyBroadcastKey.disabled = !broadcastKey;
-  if (inputSpectatorPort) inputSpectatorPort.disabled = isListeningOrActive;
+
+  // 5. Broadcasters list
+  if (Array.isArray(activeBroadcasts)) {
+    renderBroadcastersList(activeBroadcasts);
+  }
 
   // 4. Update live match panel header badge if not in game
   if (statusStr !== 'IN_GAME' && liveMatchBadgeText && liveMatchBadge) {
@@ -1479,20 +1642,22 @@ function renderPlayerSlot(slotNum, player) {
 }
 
 async function startSpectatorSession() {
-  const port = parseInt(inputSpectatorPort?.value, 10) || 51441;
+  const autoArchive = chkAutoArchive ? chkAutoArchive.checked : true;
+  const lunarUpload = chkLunarUpload ? chkLunarUpload.checked : true;
   if (btnStartSpectator) btnStartSpectator.disabled = true;
   try {
     const res = await fetch('/api/broadcast/session', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ port }),
+      body: JSON.stringify({ autoArchive, lunarUpload }),
     });
     const data = await res.json();
     if (!res.ok) {
       throw new Error(data.error || 'Failed to start session');
     }
     updateSpectatorUI(data);
-    showToast(`Spectator session listening on port ${data.port}! 📡`);
+    const specId = data.spectatorId || data.broadcastKey || 'active';
+    showToast(`Spectator session listening! Spectator ID: ${specId} 📡`);
   } catch (err) {
     console.error('Failed to start spectator session:', err);
     showToast(`Error: ${err.message}`);
@@ -1611,6 +1776,22 @@ function handleBroadcastEvent(msg) {
       }
       break;
     }
+    case 'broadcastsUpdated': {
+      const list = Array.isArray(msg.data) ? msg.data : (Array.isArray(msg.broadcasts) ? msg.broadcasts : []);
+      spectatorSessionState.activeBroadcasts = list;
+      renderBroadcastersList(list);
+      break;
+    }
+    case 'archiveComplete': {
+      const gameId = msg.gameId ? `${msg.gameId.slice(0, 8)}...` : 'match';
+      const dest = msg.uploaded ? 'Archived & Uploaded to Lunar Melee' : 'Archived to SQLite';
+      showToast(`📦 Match ${gameId}: ${dest}`);
+      break;
+    }
+    case 'archiveError': {
+      showToast(`⚠️ Archive failed: ${msg.error || 'Unknown error'}`);
+      break;
+    }
     case 'gameStart': {
       const gameData = msg.data || msg;
       updateSpectatorUI({ status: 'IN_GAME', currentGame: gameData });
@@ -1647,12 +1828,113 @@ function initSpectatorService() {
   btnStartSpectator?.addEventListener('click', startSpectatorSession);
   btnStopSpectator?.addEventListener('click', stopSpectatorSession);
   btnCopyBroadcastKey?.addEventListener('click', copyBroadcastKey);
-  inputSpectatorPort?.addEventListener('input', updateCommandPreview);
+  btnSlippiLogin?.addEventListener('click', loginSlippiAccount);
+  btnSlippiLogout?.addEventListener('click', logoutSlippiAccount);
+
+  slippiPasswordInput?.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') loginSlippiAccount();
+  });
+  slippiEmailInput?.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') slippiPasswordInput?.focus();
+  });
 
   // Initial fetch and start SSE listener
   pollBroadcastSession();
   connectBroadcastSSE();
 }
 
+const CHARACTER_MOVES = {
+  fox: [
+    { id: 'shine', label: 'Reflector (Shine)', ident: 'REFLECTOR_GROUND_STARTUP', state: 360 },
+    { id: 'usmash', label: 'Up Smash', ident: 'ATTACK_USMASH', state: 63 },
+    { id: 'dair', label: 'Down Aerial (Drill)', ident: 'ATTACK_AIR_LW', state: 69 },
+    { id: 'blaster', label: 'Blaster', ident: 'BLASTER_GROUND_STARTUP', state: 341 },
+  ],
+  falco: [
+    { id: 'dair', label: 'Down Aerial', ident: 'ATTACK_AIR_LW', state: 69 },
+    { id: 'laser', label: 'Blaster (Laser)', ident: 'BLASTER_GROUND_STARTUP', state: 341 },
+    { id: 'shine', label: 'Reflector (Shine)', ident: 'REFLECTOR_GROUND_STARTUP', state: 360 },
+  ],
+  marth: [
+    { id: 'fair', label: 'Forward Aerial', ident: 'ATTACK_AIR_F', state: 66 },
+    { id: 'fsmash', label: 'Forward Smash', ident: 'ATTACK_S4_START', state: 58 },
+    { id: 'dtilt', label: 'Down Tilt', ident: 'DOWNTILT', state: 57 },
+  ],
+  sheik: [
+    { id: 'fair', label: 'Forward Aerial', ident: 'ATTACK_AIR_F', state: 66 },
+    { id: 'needles', label: 'Needle Storm', ident: 'NEEDLE_STORM_GROUND_START_CHARGE', state: 341 },
+  ],
+  captainfalcon: [
+    { id: 'knee', label: 'Forward Aerial (The Knee)', ident: 'ATTACK_AIR_F', state: 66 },
+    { id: 'falcon_punch', label: 'Falcon Punch', ident: 'FALCON_PUNCH_GROUND', state: 347 },
+  ],
+  peach: [
+    { id: 'turnip', label: 'Vegetable (Turnip Pull)', ident: 'VEGETABLE_GROUND', state: 352 },
+  ],
+  jigglypuff: [
+    { id: 'rest', label: 'Rest', ident: 'REST', state: 369 },
+    { id: 'bair', label: 'Back Aerial', ident: 'ATTACK_AIR_B', state: 67 },
+  ],
+  samus: [
+    { id: 'charge_shot', label: 'Charge Shot', ident: 'CHARGE_SHOT', state: 341 },
+    { id: 'missile', label: 'Missile', ident: 'MISSILE', state: 347 },
+  ]
+};
+
+function initSpriteViewer() {
+  const charSelect = document.getElementById('sprites-char-select');
+  const moveSelect = document.getElementById('sprites-move-select');
+  const spriteImg = document.getElementById('sprite-preview-img');
+  const metaChar = document.getElementById('sprite-meta-char');
+  const metaMove = document.getElementById('sprite-meta-move');
+  const metaIdent = document.getElementById('sprite-meta-ident');
+  const metaState = document.getElementById('sprite-meta-state');
+
+  if (!charSelect || !moveSelect) return;
+
+  function updateMoveOptions() {
+    const char = charSelect.value;
+    const moves = CHARACTER_MOVES[char] || [
+      { id: 'nair', label: 'Neutral Air', ident: 'ATTACK_AIR_N', state: 65 },
+      { id: 'fair', label: 'Forward Air', ident: 'ATTACK_AIR_F', state: 66 },
+      { id: 'fsmash', label: 'Forward Smash', ident: 'ATTACK_S4_START', state: 58 }
+    ];
+
+    moveSelect.innerHTML = '';
+    moves.forEach(m => {
+      const opt = document.createElement('option');
+      opt.value = m.id;
+      opt.textContent = m.label;
+      moveSelect.appendChild(opt);
+    });
+
+    renderSelectedSprite();
+  }
+
+  function renderSelectedSprite() {
+    const char = charSelect.value;
+    const move = moveSelect.value;
+    const moves = CHARACTER_MOVES[char] || [];
+    const meta = moves.find(m => m.id === move) || { label: move, ident: 'ATTACK', state: 'Active' };
+
+    if (spriteImg) {
+      spriteImg.src = `/api/sprites/${char}/${move}`;
+    }
+    if (metaChar) metaChar.textContent = charSelect.options[charSelect.selectedIndex]?.text || char;
+    if (metaMove) metaMove.textContent = meta.label;
+    if (metaIdent) metaIdent.textContent = meta.ident;
+    if (metaState) metaState.textContent = `ActionState: ${meta.state}`;
+
+    updateCommandPreview();
+  }
+
+  charSelect.addEventListener('change', updateMoveOptions);
+  moveSelect.addEventListener('change', renderSelectedSprite);
+
+  updateMoveOptions();
+}
+
 initSpectatorService();
+initSpriteViewer();
+
 

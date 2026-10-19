@@ -52,6 +52,7 @@
           <button class="tab-btn" role="tab" aria-selected="false" data-tab="export">Export</button>
           <button class="tab-btn" role="tab" aria-selected="false" data-tab="custom">Custom</button>
           <button class="tab-btn" role="tab" aria-selected="false" data-tab="spectate">Live Spectate</button>
+          <button class="tab-btn" role="tab" aria-selected="false" data-tab="sprites">Move Sprites</button>
         </nav>
 
         <!-- Command Form Panels -->
@@ -351,44 +352,93 @@
           <!-- 9. Live Spectate Form -->
           <form id="form-spectate" class="command-form" data-command="spectate">
             <fieldset>
-              <legend>Slippi Remote Spectator</legend>
-              <p class="form-desc">Provision a broadcast key, connect to live Slippi tournament/ranked gameplay, and monitor matches in real time.</p>
+              <legend>Official Slippi Cloud Spectator</legend>
+              <p class="form-desc">Connect directly to Slippi's official cloud relay. Share your 28-character Spectator ID with players, auto-archive finished matches to SQLite, and sync to Lunar Melee.</p>
 
-              <!-- Session Controls Card -->
+              <!-- Slippi Account Authentication Card -->
               <div class="spectator-card">
                 <div class="spectator-card-header">
-                  <span class="spectator-card-title">Spectator Session</span>
+                  <span class="spectator-card-title">Slippi Account</span>
+                  <div id="slippi-account-badge" class="badge-status idle">
+                    <span class="badge-dot"></span>
+                    <span id="slippi-account-status">NOT CONNECTED</span>
+                  </div>
+                </div>
+
+                <!-- Unauthenticated Login Form -->
+                <div id="slippi-login-section" class="spectator-login-row">
+                  <div class="form-row-compact">
+                    <input type="email" id="slippi-email" class="form-control" placeholder="Slippi Email" autocomplete="username">
+                    <input type="password" id="slippi-password" class="form-control" placeholder="Password" autocomplete="current-password">
+                    <button type="button" id="btn-slippi-login" class="btn-primary btn-sm">Sign In</button>
+                  </div>
+                  <span class="login-subtext">Credentials are saved locally to securely auto-reconnect and refresh tokens.</span>
+                </div>
+
+                <!-- Authenticated User Display -->
+                <div id="slippi-profile-section" class="spectator-profile-row hidden">
+                  <div class="profile-details">
+                    <span class="profile-name" id="slippi-display-name">Player</span>
+                    <span class="profile-code" id="slippi-connect-code">CODE#000</span>
+                  </div>
+                  <button type="button" id="btn-slippi-logout" class="btn-secondary btn-xs" title="Sign out of Slippi">
+                    Sign Out
+                  </button>
+                </div>
+              </div>
+
+              <!-- Spectator Session & Spectator ID Card -->
+              <div class="spectator-card">
+                <div class="spectator-card-header">
+                  <span class="spectator-card-title">Cloud Relay Session</span>
                   <div id="spectator-status-badge" class="badge-status idle">
                     <span class="badge-dot"></span>
                     <span id="spectator-status-text">IDLE</span>
                   </div>
                 </div>
 
-                <!-- Active Broadcast Key Display -->
+                <!-- Active Spectator ID Display -->
                 <div class="broadcast-key-box">
-                  <span class="broadcast-key-label">ACTIVE BROADCAST KEY</span>
+                  <span class="broadcast-key-label">OFFICIAL SLIPPI SPECTATOR ID (FIREBASE UID)</span>
                   <div class="broadcast-key-row">
-                    <code id="broadcast-key-val" class="broadcast-key-code">NO ACTIVE SESSION</code>
-                    <button type="button" id="btn-copy-broadcast-key" class="btn-secondary btn-sm" title="Copy Broadcast Key" disabled>
-                      Copy Key 📋
+                    <code id="broadcast-key-val" class="broadcast-key-code">PLEASE SIGN IN</code>
+                    <button type="button" id="btn-copy-broadcast-key" class="btn-secondary btn-sm" title="Copy Spectator ID" disabled>
+                      Copy ID 📋
                     </button>
                   </div>
                 </div>
 
                 <!-- Session Actions: Start / Stop -->
-                <div class="form-row">
+                <div class="form-row" style="margin-top: 10px;">
                   <button type="button" id="btn-start-spectator" class="btn-primary btn-md">
-                    ▶ Start Listening
+                    ▶ Start Spectating
                   </button>
                   <button type="button" id="btn-stop-spectator" class="btn-danger btn-md" disabled>
                     ■ Stop Session
                   </button>
                 </div>
 
-                <!-- TCP Listener Port Config -->
-                <div class="form-group" style="margin-top: 8px;">
-                  <label for="spectator-port">Direct TCP Listener Port (Fallback)</label>
-                  <input type="number" id="spectator-port" value="51441" class="form-control" placeholder="51441">
+                <!-- Dual Persistence & Lunar Melee Options -->
+                <div class="persistence-options-row">
+                  <label class="checkbox-label">
+                    <input type="checkbox" id="chk-auto-archive" checked>
+                    <span>Auto-Archive Stats to SQLite</span>
+                  </label>
+                  <label class="checkbox-label">
+                    <input type="checkbox" id="chk-lunar-upload" checked>
+                    <span>Upload to Lunar Melee</span>
+                  </label>
+                </div>
+              </div>
+
+              <!-- Active Broadcasters Card -->
+              <div id="broadcasters-card" class="spectator-card hidden">
+                <div class="spectator-card-header">
+                  <span class="spectator-card-title">Active Broadcasters</span>
+                  <span id="broadcasters-count" class="badge-pill">0</span>
+                </div>
+                <div id="broadcasters-list" class="broadcasters-list-container">
+                  <!-- Populated dynamically -->
                 </div>
               </div>
 
@@ -398,15 +448,62 @@
                   <span class="instructions-icon">ℹ️</span>
                   <span class="instructions-title">Broadcaster Setup Instructions</span>
                 </div>
-                <p class="instructions-lead">Give the Broadcast Key to the player, who connects via Slippi Launcher:</p>
+                <p class="instructions-lead">Give your Spectator ID to the remote player, who streams via Slippi Launcher:</p>
                 <div class="instructions-steps">
                   <div class="step-item"><span class="step-num">1</span><span class="step-text">Open <strong>Slippi Launcher</strong></span></div>
                   <div class="step-item"><span class="step-num">2</span><span class="step-text">Go to <strong>Gameplay Broadcasts</strong></span></div>
-                  <div class="step-item"><span class="step-num">3</span><span class="step-text">Paste <strong>Broadcast Key</strong></span></div>
+                  <div class="step-item"><span class="step-num">3</span><span class="step-text">Add Spectator ID (paste <strong>Spectator ID</strong>)</span></div>
                   <div class="step-item"><span class="step-num">4</span><span class="step-text">Click <strong>Start</strong></span></div>
                 </div>
                 <div class="instructions-quote">
-                  <code>"Open Slippi Launcher → Gameplay Broadcasts → Paste Broadcast Key → Start"</code>
+                  <code>"In Slippi Launcher → Gameplay Broadcasts → Add Spectator ID → Start"</code>
+                </div>
+              </div>
+            </fieldset>
+          </form>
+
+          <!-- 10. Move Sprites Viewer Form -->
+          <form id="form-sprites" class="command-form" data-command="sprites">
+            <fieldset>
+              <legend>Melee Move Sprite &amp; Animation Viewer</legend>
+              <p class="form-desc">Inspect high-fidelity 60 FPS move animations, frame counts, and special action states across the Melee roster.</p>
+
+              <div class="character-select-grid">
+                <div class="form-group">
+                  <label for="sprites-char-select">Fighter</label>
+                  <select id="sprites-char-select" class="form-control" name="char">
+                    <option value="fox" selected>Fox</option>
+                    <option value="falco">Falco</option>
+                    <option value="marth">Marth</option>
+                    <option value="sheik">Sheik</option>
+                    <option value="captainfalcon">Captain Falcon</option>
+                    <option value="peach">Peach</option>
+                    <option value="jigglypuff">Jigglypuff</option>
+                    <option value="samus">Samus</option>
+                  </select>
+                </div>
+
+                <div class="form-group">
+                  <label for="sprites-move-select">Attack / Move</label>
+                  <select id="sprites-move-select" class="form-control" name="move">
+                    <option value="shine" selected>Reflector (Shine)</option>
+                    <option value="usmash">Up Smash</option>
+                    <option value="dair">Down Aerial</option>
+                    <option value="blaster">Blaster</option>
+                  </select>
+                </div>
+              </div>
+
+              <!-- Animated Sprite Card -->
+              <div class="sprite-viewer-card">
+                <div class="sprite-img-container">
+                  <img id="sprite-preview-img" src="/assets/sprites/fox/shine.gif" alt="Move Animation" class="sprite-img-preview">
+                </div>
+                <div class="sprite-meta-badge">
+                  <span id="sprite-meta-char" class="sprite-meta-tag">Fox</span>
+                  <span id="sprite-meta-move" class="sprite-meta-tag">Down-B (Reflector)</span>
+                  <span id="sprite-meta-ident" class="sprite-meta-tag">REFLECTOR_GROUND_STARTUP</span>
+                  <span id="sprite-meta-state" class="sprite-meta-tag">ActionState: 360</span>
                 </div>
               </div>
             </fieldset>
