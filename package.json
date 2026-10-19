@@ -4,12 +4,23 @@
   "description": "High-throughput Melee .slp replay analysis engine, SQLite catalog, and Lunar Melee batch pipeline",
   "type": "module",
   "scripts": {
-    "test": "node --no-warnings test/stage1_local_test.js && node --no-warnings test/server_test.js",
+    "test": "node --no-warnings --test \"test/unit/*.test.js\" \"test/integration/*.test.js\" \"test/e2e/*.test.js\" && node --no-warnings test/stage1_local_test.js && node --no-warnings test/server_test.js",
+    "test:unit": "node --no-warnings --test \"test/unit/*.test.js\"",
+    "test:integration": "node --no-warnings --test \"test/integration/*.test.js\"",
+    "test:e2e": "node --no-warnings --test \"test/e2e/*.test.js\"",
+    "test:watch": "node --no-warnings --test --watch \"test/unit/*.test.js\" \"test/integration/*.test.js\" \"test/e2e/*.test.js\"",
+    "test:coverage": "node --no-warnings --test --experimental-test-coverage \"test/unit/*.test.js\" \"test/integration/*.test.js\" \"test/e2e/*.test.js\"",
+    "test:legacy": "node --no-warnings test/stage1_local_test.js && node --no-warnings test/server_test.js && node --no-warnings test/broadcast_spectator_test.js && node --no-warnings test/habit_analysis_test.js",
+    "lint": "eslint src/ test/",
+    "lint:fix": "eslint src/ test/ --fix",
     "cli": "node --no-warnings src/cli.js",
     "ui": "node --no-warnings src/cli.js serve",
     "serve": "node --no-warnings src/cli.js serve"
   },
   "dependencies": {
     "@slippi/slippi-js": "^9.1.3"
+  },
+  "devDependencies": {
+    "eslint": "^8.57.1"
   }
 }
