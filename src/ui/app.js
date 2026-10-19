@@ -466,8 +466,7 @@ function getActiveCommandArgs() {
     }
 
     case 'spectate': {
-      const port = inputSpectatorPort?.value || '51441';
-      return ['spectate', `--port=${port}`];
+      return ['spectate'];
     }
 
     case 'sprites': {
@@ -948,16 +947,16 @@ async function executeCommand() {
 
   if (currentTab === 'spectate') {
     terminalOutput.innerHTML = '';
-    const port = inputSpectatorPort?.value || '51441';
-    appendTerminalText(`\x1b[36m$ node src/cli.js spectate --port=${port}\x1b[0m\n\n`);
+    appendTerminalText(`\x1b[36m$ node src/cli.js spectate\x1b[0m\n\n`);
     if (trayState === 'min') {
       setTrayState('default');
     }
-    appendTerminalText(`\x1b[90mStarting live Slippi spectator session on port ${port}...\x1b[0m\n`);
+    appendTerminalText(`\x1b[90mConnecting to Slippi Cloud Broadcast Relay...\x1b[0m\n`);
     try {
       await startSpectatorSession();
-      appendTerminalText(`\x1b[32m✔ Spectator session listening! Broadcast Key: ${spectatorSessionState.broadcastKey || 'active'}\x1b[0m\n`);
-      appendTerminalText(`\x1b[90mInstructions: Open Slippi Launcher → Gameplay Broadcasts → Paste Broadcast Key → Start\x1b[0m\n`);
+      const specId = spectatorSessionState.spectatorId || spectatorSessionState.broadcastKey || 'active';
+      appendTerminalText(`\x1b[32m✔ Cloud spectator session active! Spectator ID: ${specId}\x1b[0m\n`);
+      appendTerminalText(`\x1b[90mInstructions: Open Slippi Launcher → Gameplay Broadcasts → Add Spectator ID → Start\x1b[0m\n`);
     } catch (err) {
       appendTerminalText(`\x1b[31m✖ Failed to start spectator session: ${err.message}\x1b[0m\n`);
     }
@@ -1643,20 +1642,22 @@ function renderPlayerSlot(slotNum, player) {
 }
 
 async function startSpectatorSession() {
-  const port = parseInt(inputSpectatorPort?.value, 10) || 51441;
+  const autoArchive = chkAutoArchive ? chkAutoArchive.checked : true;
+  const lunarUpload = chkLunarUpload ? chkLunarUpload.checked : true;
   if (btnStartSpectator) btnStartSpectator.disabled = true;
   try {
     const res = await fetch('/api/broadcast/session', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ port }),
+      body: JSON.stringify({ autoArchive, lunarUpload }),
     });
     const data = await res.json();
     if (!res.ok) {
       throw new Error(data.error || 'Failed to start session');
     }
     updateSpectatorUI(data);
-    showToast(`Spectator session listening on port ${data.port}! 📡`);
+    const specId = data.spectatorId || data.broadcastKey || 'active';
+    showToast(`Spectator session listening! Spectator ID: ${specId} 📡`);
   } catch (err) {
     console.error('Failed to start spectator session:', err);
     showToast(`Error: ${err.message}`);
@@ -1775,6 +1776,22 @@ function handleBroadcastEvent(msg) {
       }
       break;
     }
+    case 'broadcastsUpdated': {
+      const list = Array.isArray(msg.data) ? msg.data : (Array.isArray(msg.broadcasts) ? msg.broadcasts : []);
+      spectatorSessionState.activeBroadcasts = list;
+      renderBroadcastersList(list);
+      break;
+    }
+    case 'archiveComplete': {
+      const gameId = msg.gameId ? `${msg.gameId.slice(0, 8)}...` : 'match';
+      const dest = msg.uploaded ? 'Archived & Uploaded to Lunar Melee' : 'Archived to SQLite';
+      showToast(`📦 Match ${gameId}: ${dest}`);
+      break;
+    }
+    case 'archiveError': {
+      showToast(`⚠️ Archive failed: ${msg.error || 'Unknown error'}`);
+      break;
+    }
     case 'gameStart': {
       const gameData = msg.data || msg;
       updateSpectatorUI({ status: 'IN_GAME', currentGame: gameData });
@@ -1811,7 +1828,15 @@ function initSpectatorService() {
   btnStartSpectator?.addEventListener('click', startSpectatorSession);
   btnStopSpectator?.addEventListener('click', stopSpectatorSession);
   btnCopyBroadcastKey?.addEventListener('click', copyBroadcastKey);
-  inputSpectatorPort?.addEventListener('input', updateCommandPreview);
+  btnSlippiLogin?.addEventListener('click', loginSlippiAccount);
+  btnSlippiLogout?.addEventListener('click', logoutSlippiAccount);
+
+  slippiPasswordInput?.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') loginSlippiAccount();
+  });
+  slippiEmailInput?.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') slippiPasswordInput?.focus();
+  });
 
   // Initial fetch and start SSE listener
   pollBroadcastSession();
