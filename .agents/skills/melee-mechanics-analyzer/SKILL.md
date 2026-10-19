@@ -349,3 +349,22 @@ Evaluated over a **45-frame window** following advantage neutralization (e.g. co
 ### 25. Spacie Multishining & Waveshining (Fox/Falco)
 - **Multishine**: Shine (`360`–`368`) $\to$ jump cancel `ACTION_KNEE_BEND` on frame 4 (Fox) or frame 5 (Falco) $\to$ immediate second shine on frame 1 of leaving ground.
 - **Waveshine**: Shine $\to$ jump cancel $\to$ immediate diagonal wavedash out of jumpsquat.
+
+### 26. Character-Specific Special Action States (IDs 341+)
+In Melee, action states 0 through 340 (`0x0` to `0x154`) are universal across all characters. Action states $\ge 341$ (`0x155+`) are **character-specific**:
+- The same numeric ID has completely different semantic meanings depending on the fighter (e.g., ID 353 is Fire Fox on Fox, Fire Bird on Falco, or non-recovery states on other characters).
+- **Mandatory Character Context**: Any predicate evaluating special moves or shine states must take both `actionStateId` AND `characterId` (0–25):
+  ```javascript
+  import { isShine, isRecoverySpecial, isProjectileSpecial, isReflectorSpecial } from '../constants/specialActionStates.js';
+
+  // ❌ WRONG: Fails on non-spacies who share state IDs 360-368
+  const shine = state >= 360 && state <= 368;
+
+  // ✅ CORRECT: Enforces Fox (2) or Falco (20)
+  const shine = isShine(state, characterId);
+  ```
+- **Semantic Classification**:
+  - **Recovery Specials**: Up-B / Side-B mobility moves (`isRecoverySpecial(state, characterId)`).
+  - **Projectiles**: Blasters, needles, turnips, missiles, charge shots (`isProjectileSpecial(state, characterId)`).
+  - **Reflectors & Absorptions**: Spacie reflectors, Cape, Nayru's Love, Magnet (`isReflectorSpecial(state, characterId)`).
+

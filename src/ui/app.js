@@ -65,11 +65,29 @@ const liveMatchBadge = document.getElementById('live-match-badge');
 const liveMatchBadgeText = document.getElementById('live-match-badge-text');
 const liveMatchStagePill = document.getElementById('live-match-stage-pill');
 const matchWaitingState = document.getElementById('match-waiting-state');
+const matchPregameState = document.getElementById('match-pregame-state');
 const matchActiveCard = document.getElementById('match-active-card');
 const matchStageBackdrop = document.getElementById('match-stage-backdrop');
 const matchStageName = document.getElementById('match-stage-name');
 const matchStageTag = document.getElementById('match-stage-tag');
 const vsStageLabel = document.getElementById('vs-stage-label');
+
+// Pre-Game Dashboard Elements
+const pregameBroadcasterName = document.getElementById('pregame-broadcaster-name');
+const pregameBroadcasterCode = document.getElementById('pregame-broadcaster-code');
+const pregameStatusBadge = document.getElementById('pregame-status-badge');
+const pregameStatusBadgeText = document.getElementById('pregame-status-badge-text');
+const pregameStreamStatus = document.getElementById('pregame-stream-status');
+const pregameChunkCounter = document.getElementById('pregame-chunk-counter');
+const pregameThroughput = document.getElementById('pregame-throughput');
+const pregameUptime = document.getElementById('pregame-uptime');
+const pregameScannerDesc = document.getElementById('pregame-scanner-desc');
+
+// Spectator Telemetry Card Elements
+const spectatorHealthBadge = document.getElementById('spectator-health-badge');
+const spectatorHealthText = document.getElementById('spectator-health-text');
+const spectatorPacketCounter = document.getElementById('spectator-packet-counter');
+const spectatorThroughputVal = document.getElementById('spectator-throughput-val');
 
 // Console Tray Controls
 const btnTrayMin = document.getElementById('btn-tray-min');
@@ -1355,6 +1373,7 @@ function getStageDetails(stageId, rawName = '') {
 
 let spectatorSessionState = {
   status: 'IDLE',
+  parserState: 'IDLE',
   broadcastKey: null,
   spectatorId: null,
   account: null,
@@ -1362,7 +1381,12 @@ let spectatorSessionState = {
   currentBroadcastId: null,
   currentBroadcaster: null,
   currentGame: null,
+  sessionStartTime: null,
+  telemetry: null,
 };
+
+let pregameUptimeTimer = null;
+let lastConsolePacketLog = 0;
 
 let broadcastEventSource = null;
 let broadcastPollTimer = null;
@@ -1531,30 +1555,147 @@ function updateSpectatorUI(session) {
     renderBroadcastersList(activeBroadcasts);
   }
 
-  // 4. Update live match panel header badge if not in game
+  // 6. Live telemetry update if present
+  if (session.telemetry) {
+    updateTelemetryUI(session.telemetry);
+  }
+
+  // 7. Update live match panel header badge if not in game
   if (statusStr !== 'IN_GAME' && liveMatchBadgeText && liveMatchBadge) {
-    liveMatchBadgeText.textContent = statusStr === 'LISTENING' ? 'LISTENING' : statusStr === 'CONNECTED' ? 'CONNECTED' : 'WAITING FOR GAME';
+    const badgeText = statusStr === 'LISTENING' ? 'LISTENING' : (statusStr === 'CONNECTED' || statusStr === 'MENUS_ACTIVE' ? 'CONNECTED' : 'WAITING FOR GAME');
+    liveMatchBadgeText.textContent = badgeText;
     liveMatchBadge.className = `badge-status ${statusStr.toLowerCase()}`;
   }
 
-  // 5. If status is IDLE or LISTENING and no game is active, ensure State A
-  if ((statusStr === 'IDLE' || statusStr === 'LISTENING') && !spectatorSessionState.currentGame) {
+  // 8. Determine match panel view state
+  if (spectatorSessionState.currentGame) {
+    renderLiveMatchCard(spectatorSessionState.currentGame);
+  } else if (spectatorSessionState.currentBroadcastId || statusStr === 'CONNECTED' || statusStr === 'MENUS_ACTIVE' || spectatorSessionState.parserState === 'MENUS_ACTIVE') {
+    showMatchPregameState();
+  } else if (statusStr === 'IDLE' || statusStr === 'LISTENING') {
     showMatchWaitingState();
   }
 }
 
+function startPregameUptimeTimer() {
+  if (pregameUptimeTimer) return;
+  const startTime = spectatorSessionState.sessionStartTime
+    ? new Date(spectatorSessionState.sessionStartTime).getTime()
+    : Date.now();
+
+  const updateUptime = () => {
+    if (!pregameUptime) return;
+    const elapsed = Math.max(0, Math.floor((Date.now() - startTime) / 1000));
+    const hrs = Math.floor(elapsed / 3600);
+    const m = Math.floor((elapsed % 3600) / 60).toString().padStart(2, '0');
+    const s = (elapsed % 60).toString().padStart(2, '0');
+    pregameUptime.textContent = hrs > 0 ? `${hrs}:${m}:${s}` : `${m}:${s}`;
+  };
+
+  updateUptime();
+  pregameUptimeTimer = setInterval(updateUptime, 1000);
+}
+
+function stopPregameUptimeTimer() {
+  if (pregameUptimeTimer) {
+    clearInterval(pregameUptimeTimer);
+    pregameUptimeTimer = null;
+  }
+}
+
 function showMatchWaitingState() {
+  stopPregameUptimeTimer();
   if (matchWaitingState) matchWaitingState.classList.remove('hidden');
+  if (matchPregameState) matchPregameState.classList.add('hidden');
   if (matchActiveCard) matchActiveCard.classList.add('hidden');
   if (liveMatchStagePill) liveMatchStagePill.textContent = '--';
   const statusStr = (spectatorSessionState.status || 'IDLE').toUpperCase();
-  if (liveMatchBadgeText) liveMatchBadgeText.textContent = statusStr === 'LISTENING' ? 'LISTENING' : statusStr === 'CONNECTED' ? 'CONNECTED' : 'WAITING FOR GAME';
+  if (liveMatchBadgeText) liveMatchBadgeText.textContent = statusStr === 'LISTENING' ? 'LISTENING' : 'WAITING FOR GAME';
   if (liveMatchBadge) liveMatchBadge.className = `badge-status ${statusStr.toLowerCase()}`;
+}
+
+function showMatchPregameState() {
+  if (matchWaitingState) matchWaitingState.classList.add('hidden');
+  if (matchActiveCard) matchActiveCard.classList.add('hidden');
+  if (matchPregameState) matchPregameState.classList.remove('hidden');
+
+  if (liveMatchStagePill) liveMatchStagePill.textContent = 'STAGE SELECT';
+  if (liveMatchBadgeText) liveMatchBadgeText.textContent = 'PRE-GAME';
+  if (liveMatchBadge) liveMatchBadge.className = 'badge-status connected';
+
+  const broadcaster = spectatorSessionState.currentBroadcaster;
+  if (pregameBroadcasterName) {
+    pregameBroadcasterName.textContent = broadcaster?.displayName || 'Active Stream';
+  }
+  if (pregameBroadcasterCode) {
+    pregameBroadcasterCode.textContent = broadcaster?.connectCode ? `(${broadcaster.connectCode})` : '';
+  }
+
+  const pState = spectatorSessionState.parserState || spectatorSessionState.status || 'CONNECTED';
+  if (pregameStatusBadgeText) {
+    pregameStatusBadgeText.textContent = 'Character Select / Stage Select in Progress — Awaiting Match Start (0x35)';
+  }
+  if (pregameStreamStatus) {
+    pregameStreamStatus.textContent = pState === 'MENUS_ACTIVE' ? 'MENUS ACTIVE' : 'CONNECTED';
+    pregameStreamStatus.className = 'pregame-metric-val status-accent';
+  }
+
+  startPregameUptimeTimer();
+}
+
+function updateTelemetryUI(telemetry) {
+  if (!telemetry) return;
+  const packetCount = telemetry.packetCount ?? telemetry.chunkCount ?? 0;
+  const rawRate = telemetry.throughputKbps ?? telemetry.throughputRate ?? 0;
+  const kbps = (typeof rawRate === 'number' ? rawRate : parseFloat(rawRate) || 0).toFixed(1);
+  const parserState = telemetry.parserState || telemetry.status || 'IDLE';
+
+  // Update Spectator Session Card
+  if (spectatorPacketCounter) {
+    spectatorPacketCounter.textContent = packetCount.toLocaleString();
+  }
+  if (spectatorThroughputVal) {
+    spectatorThroughputVal.textContent = `${kbps} KB/s`;
+  }
+  if (spectatorHealthBadge && spectatorHealthText) {
+    const isOnline = spectatorSessionState.status !== 'IDLE';
+    const isIngesting = packetCount > 0;
+    spectatorHealthBadge.className = `badge-status ${isIngesting ? 'connected' : (isOnline ? 'listening' : 'idle')}`;
+    spectatorHealthText.textContent = isIngesting
+      ? (parserState === 'IN_GAME' ? 'IN GAME' : (parserState === 'MENUS_ACTIVE' ? 'MENUS ACTIVE' : 'STREAMING'))
+      : (isOnline ? 'LISTENING' : 'OFFLINE');
+  }
+
+  // Update Pre-Game Dashboard
+  if (pregameChunkCounter) {
+    pregameChunkCounter.textContent = packetCount.toLocaleString();
+  }
+  if (pregameThroughput) {
+    pregameThroughput.textContent = `${kbps} KB/s`;
+  }
+  if (pregameStreamStatus) {
+    const formattedParserState = parserState === 'MENUS_ACTIVE'
+      ? 'MENUS ACTIVE'
+      : (parserState === 'CONNECTED_TO_STREAM' ? 'CONNECTED' : parserState);
+    pregameStreamStatus.textContent = formattedParserState;
+  }
+
+  if (packetCount === 0 || packetCount < lastConsolePacketLog) {
+    lastConsolePacketLog = 0;
+  }
+
+  // Console tray logging for real-time stream ingestion telemetry
+  if (packetCount > 0 && (packetCount - lastConsolePacketLog >= 100 || (lastConsolePacketLog === 0 && packetCount >= 1))) {
+    lastConsolePacketLog = packetCount;
+    const totalKb = (((telemetry.totalBytes || telemetry.byteCount || 0)) / 1024).toFixed(1);
+    appendTerminalText(`\x1b[90m[Stream Telemetry] Ingested ${packetCount} chunks (${totalKb} KB) @ ${kbps} KB/s — Parser: ${parserState}\x1b[0m\n`);
+  }
 }
 
 function renderLiveMatchCard(game) {
   if (!game) return;
   spectatorSessionState.currentGame = game;
+  stopPregameUptimeTimer();
 
   const stageInfo = getStageDetails(game.stageId, game.stageName);
 
@@ -1590,6 +1731,7 @@ function renderLiveMatchCard(game) {
 
   // Switch to State B
   if (matchWaitingState) matchWaitingState.classList.add('hidden');
+  if (matchPregameState) matchPregameState.classList.add('hidden');
   if (matchActiveCard) matchActiveCard.classList.remove('hidden');
 }
 
@@ -1644,6 +1786,7 @@ function renderPlayerSlot(slotNum, player) {
 async function startSpectatorSession() {
   const autoArchive = chkAutoArchive ? chkAutoArchive.checked : true;
   const lunarUpload = chkLunarUpload ? chkLunarUpload.checked : true;
+  lastConsolePacketLog = 0;
   if (btnStartSpectator) btnStartSpectator.disabled = true;
   try {
     const res = await fetch('/api/broadcast/session', {
@@ -1675,12 +1818,19 @@ async function stopSpectatorSession() {
     if (!res.ok) {
       throw new Error(data.error || 'Failed to stop session');
     }
+    lastConsolePacketLog = 0;
+    stopPregameUptimeTimer();
     updateSpectatorUI({
       status: 'IDLE',
+      parserState: 'IDLE',
       broadcastKey: null,
+      currentBroadcastId: null,
+      currentBroadcaster: null,
       currentGame: null,
+      telemetry: { packetCount: 0, chunkCount: 0, byteCount: 0, totalBytes: 0, throughputKbps: 0, throughputRate: 0, parserState: 'IDLE', status: 'IDLE' },
     });
     showMatchWaitingState();
+    appendTerminalText('\x1b[31m[Broadcast Service] Session stopped.\x1b[0m\n');
     showToast('Spectator session stopped.');
   } catch (err) {
     console.error('Failed to stop spectator session:', err);
@@ -1762,18 +1912,24 @@ function handleBroadcastEvent(msg) {
   switch (msg.type) {
     case 'session': {
       updateSpectatorUI(msg);
-      if (msg.currentGame) {
-        renderLiveMatchCard(msg.currentGame);
-      } else {
-        showMatchWaitingState();
+      break;
+    }
+    case 'telemetry': {
+      updateTelemetryUI(msg.data || msg);
+      break;
+    }
+    case 'menuActive': {
+      spectatorSessionState.status = 'MENUS_ACTIVE';
+      spectatorSessionState.parserState = 'MENUS_ACTIVE';
+      if (!spectatorSessionState.currentGame) {
+        showMatchPregameState();
       }
+      appendTerminalText(`\x1b[33m[Broadcaster] Character Select / Stage Select in Progress (Menus Active)\x1b[0m\n`);
       break;
     }
     case 'statusChange': {
       updateSpectatorUI(msg);
-      if (msg.status !== 'IN_GAME' && !spectatorSessionState.currentGame) {
-        showMatchWaitingState();
-      }
+      appendTerminalText(`\x1b[34m[Broadcast Status] State: ${msg.status} (Parser: ${msg.parserState || msg.status})\x1b[0m\n`);
       break;
     }
     case 'broadcastsUpdated': {
@@ -1784,7 +1940,8 @@ function handleBroadcastEvent(msg) {
     }
     case 'archiveComplete': {
       const gameId = msg.gameId ? `${msg.gameId.slice(0, 8)}...` : 'match';
-      const dest = msg.uploaded ? 'Archived & Uploaded to Lunar Melee' : 'Archived to SQLite';
+      const isUploaded = Boolean(msg.uploaded || (msg.uploadResult && !msg.uploadResult.error));
+      const dest = isUploaded ? 'Archived & Uploaded to Lunar Melee' : 'Archived to SQLite';
       showToast(`📦 Match ${gameId}: ${dest}`);
       break;
     }
@@ -1794,16 +1951,39 @@ function handleBroadcastEvent(msg) {
     }
     case 'gameStart': {
       const gameData = msg.data || msg;
-      updateSpectatorUI({ status: 'IN_GAME', currentGame: gameData });
+      updateSpectatorUI({ status: 'IN_GAME', parserState: 'IN_GAME', currentGame: gameData });
       renderLiveMatchCard(gameData);
+      const pSummary = (gameData.players || []).map(p => `${p.displayName || 'Player'} (${p.characterName || 'Char'})`).join(' vs ');
+      appendTerminalText(`\x1b[32m[Match Start] GAME_START detected on ${gameData.stageName || 'Stage'} — ${pSummary}\x1b[0m\n`);
       showToast(`Live match started on ${gameData.stageName || 'Stage'}! ⚔️`);
       break;
     }
     case 'gameEnd': {
-      const nextStatus = spectatorSessionState.status === 'IN_GAME' ? 'CONNECTED' : (spectatorSessionState.status || 'CONNECTED');
-      updateSpectatorUI({ status: nextStatus, currentGame: null });
-      showMatchWaitingState();
-      showToast('Live match ended. Waiting for next game.');
+      spectatorSessionState.currentGame = null;
+      const isStillConnected = Boolean(
+        spectatorSessionState.currentBroadcastId ||
+        (spectatorSessionState.status !== 'IDLE' && spectatorSessionState.status !== 'LISTENING')
+      );
+      if (msg.reason === 'relay_disconnect') {
+        appendTerminalText(`\x1b[31m[Stream Disconnect] Broadcaster stream connection lost.\x1b[0m\n`);
+        showToast('Live stream disconnected.');
+      } else if (msg.reason === 'broadcast-ended') {
+        appendTerminalText(`\x1b[33m[Stream Ended] Broadcaster terminated stream.\x1b[0m\n`);
+        showToast('Broadcaster ended the stream.');
+      } else {
+        appendTerminalText(`\x1b[36m[Match End] GAME_END detected (0x39). Resetting parser for next game.\x1b[0m\n`);
+        showToast('Live match ended. Auto-archived stats to SQLite. Ready for next game! 🎮');
+      }
+
+      if (isStillConnected && msg.reason !== 'relay_disconnect' && msg.reason !== 'broadcast-ended') {
+        spectatorSessionState.status = 'CONNECTED';
+        spectatorSessionState.parserState = 'MENUS_ACTIVE';
+        updateSpectatorUI(spectatorSessionState);
+        showMatchPregameState();
+      } else {
+        updateSpectatorUI({ status: spectatorSessionState.status || 'LISTENING', currentGame: null });
+        showMatchWaitingState();
+      }
       break;
     }
   }
@@ -1815,11 +1995,6 @@ async function pollBroadcastSession() {
     if (res.ok) {
       const session = await res.json();
       updateSpectatorUI(session);
-      if (session.currentGame) {
-        renderLiveMatchCard(session.currentGame);
-      } else if (session.status !== 'IN_GAME') {
-        showMatchWaitingState();
-      }
     }
   } catch (_) {}
 }

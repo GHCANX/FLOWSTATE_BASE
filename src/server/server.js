@@ -155,9 +155,10 @@ export function createServer(options = {}) {
     if (pathname === '/api/broadcast/watch' && req.method === 'POST') {
       try {
         const body = await parseJsonBody(req);
-        broadcast.watchBroadcast(body.broadcastId);
+        const targetId = body.broadcastId || body.id || body.broadcast_id;
+        broadcast.watchBroadcast(targetId);
         res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ success: true, watching: body.broadcastId }));
+        res.end(JSON.stringify({ success: true, watching: targetId }));
       } catch (err) {
         res.writeHead(400, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ error: err.message }));
@@ -191,6 +192,8 @@ export function createServer(options = {}) {
       const onGameEnd = (end) => sendEvent('gameEnd', end);
       const onArchiveComplete = (data) => sendEvent('archiveComplete', data);
       const onArchiveError = (data) => sendEvent('archiveError', data);
+      const onTelemetry = (data) => sendEvent('telemetry', data);
+      const onMenuActive = (data) => sendEvent('menuActive', data);
 
       broadcast.on('statusChange', onStatusChange);
       broadcast.on('broadcastsUpdated', onBroadcastsUpdated);
@@ -198,6 +201,8 @@ export function createServer(options = {}) {
       broadcast.on('gameEnd', onGameEnd);
       broadcast.on('archiveComplete', onArchiveComplete);
       broadcast.on('archiveError', onArchiveError);
+      broadcast.on('telemetry', onTelemetry);
+      broadcast.on('menuActive', onMenuActive);
 
       req.on('close', () => {
         broadcast.off('statusChange', onStatusChange);
@@ -206,6 +211,8 @@ export function createServer(options = {}) {
         broadcast.off('gameEnd', onGameEnd);
         broadcast.off('archiveComplete', onArchiveComplete);
         broadcast.off('archiveError', onArchiveError);
+        broadcast.off('telemetry', onTelemetry);
+        broadcast.off('menuActive', onMenuActive);
       });
       return;
     }

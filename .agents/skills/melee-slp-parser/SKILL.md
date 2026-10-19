@@ -269,4 +269,20 @@ FlowState includes a live remote spectator receiver (`src/broadcast/broadcastSer
    }
    ```
 
+---
+
+## 7. Move Sprites & 60 FPS Animation Delivery
+
+When rendering visual aids or scouting dashboards:
+1. **Asset Sourcing & Slug Normalization**:
+   - Fetch 60 FPS move animations from FightCore CDN: `https://i.fightcore.gg/beta/:character/:move.gif`.
+   - Character slugs must follow exact normalized conventions:
+     - Mr. Game & Watch: `mrgame%26watch` (URL-encoded `&`).
+     - Captain Falcon: `captainfalcon`.
+     - Ice Climbers: `iceclimbers`.
+     - All other characters: standard lowercase alphanumeric name.
+2. **Transparent Disk Caching**:
+   - Cache downloaded animations locally in `src/ui/assets/sprites/:character/:move.gif`.
+   - Dynamic endpoints (`/api/sprites/:character/:move`) should check local cache first, fallback to CDN fetch, and serve with long-term caching (`Cache-Control: public, max-age=31536000`).
+
 
