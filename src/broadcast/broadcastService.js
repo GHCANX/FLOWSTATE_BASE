@@ -18,6 +18,8 @@ export const BroadcastState = Object.freeze({
   CONNECTING: 'CONNECTING',
   LISTENING: 'LISTENING',
   CONNECTED: 'CONNECTED',
+  CONNECTED_TO_STREAM: 'CONNECTED_TO_STREAM',
+  MENUS_ACTIVE: 'MENUS_ACTIVE',
   IN_GAME: 'IN_GAME',
 });
 
@@ -43,6 +45,7 @@ export class BroadcastService extends EventEmitter {
     this.lunarUpload = options.lunarUpload ?? true;
 
     this.status = BroadcastState.IDLE;
+    this.parserState = BroadcastState.IDLE;
     this.sessionId = null;
     this.ws = null;
     this.slpStream = null;
@@ -57,12 +60,56 @@ export class BroadcastService extends EventEmitter {
     this.pollTimer = null;
     this.reconnectTimer = null;
 
+    this.telemetry = {
+      packetCount: 0,
+      chunkCount: 0,
+      byteCount: 0,
+      totalBytes: 0,
+      throughputKbps: 0,
+      throughputRate: 0,
+      parserState: BroadcastState.IDLE,
+      status: BroadcastState.IDLE,
+    };
+    this._recentBytes = [];
+    this._lastTelemetryTime = 0;
+    this._telemetryTimer = null;
+    this._decayTimer = null;
+    this._telemetryPending = false;
+    this._handshakeBuffer = Buffer.alloc(0);
+    this._menuActiveEmitted = false;
+
     this.frameConsumer = options.frameConsumer || null;
     this.lunarClient = options.lunarClient || new LunarClient();
     this.activeArchives = 0;
 
     // Defensively attach error listener to prevent uncaught EventEmitter exceptions
     this.on('error', () => {});
+  }
+
+  /**
+   * Derive granular parser state from high-level status
+   * @param {string} status
+   * @returns {string}
+   * @private
+   */
+  _deriveParserState(status) {
+    switch (status) {
+      case BroadcastState.IN_GAME:
+        return BroadcastState.IN_GAME;
+      case BroadcastState.MENUS_ACTIVE:
+        return BroadcastState.MENUS_ACTIVE;
+      case BroadcastState.CONNECTED:
+      case BroadcastState.CONNECTED_TO_STREAM:
+        return this.parserState === BroadcastState.MENUS_ACTIVE
+          ? BroadcastState.MENUS_ACTIVE
+          : BroadcastState.CONNECTED_TO_STREAM;
+      case BroadcastState.LISTENING:
+        return BroadcastState.LISTENING;
+      case BroadcastState.CONNECTING:
+        return BroadcastState.CONNECTING;
+      default:
+        return BroadcastState.IDLE;
+    }
   }
 
   /**
@@ -73,21 +120,223 @@ export class BroadcastService extends EventEmitter {
     if (this.status === newStatus) return;
     const previousStatus = this.status;
     this.status = newStatus;
+    if (newStatus !== BroadcastState.MENUS_ACTIVE) {
+      this._menuActiveEmitted = false;
+    }
+    this.parserState = this._deriveParserState(newStatus);
+    this.telemetry.parserState = this.parserState;
+    this.telemetry.status = this.status;
+
     this.emit('statusChange', {
       status: this.status,
+      parserState: this.parserState,
       previousStatus,
       sessionId: this.sessionId,
-      spectatorId: this.auth.fbUid,
-      broadcastKey: this.auth.fbUid,
+      spectatorId: this.auth.fbUid || null,
+      broadcastKey: this.auth.fbUid || null,
       currentBroadcaster: this.currentBroadcaster,
       currentGame: this.currentGame,
     });
+
+    // Immediate dispatch without throttling on state transition
+    this._emitTelemetry(true);
+  }
+
+  /**
+   * Calculate rolling throughput rate in KB/s over 1 second window
+   * @returns {number}
+   * @private
+   */
+  _calculateThroughput() {
+    const now = Date.now();
+    const cutoff = now - 1000;
+    let removeCount = 0;
+    while (removeCount < this._recentBytes.length && this._recentBytes[removeCount].time < cutoff) {
+      removeCount++;
+    }
+    if (removeCount > 0) {
+      this._recentBytes.splice(0, removeCount);
+    }
+    const sumBytes = this._recentBytes.reduce((acc, curr) => acc + curr.bytes, 0);
+    return Math.round((sumBytes / 1024) * 10) / 10;
+  }
+
+  /**
+   * Emit telemetry event over SSE (throttled to 10 Hz unless forceImmediate=true)
+   * @param {boolean} [forceImmediate=false]
+   * @private
+   */
+  _emitTelemetry(forceImmediate = false) {
+    if (this._telemetryTimer) {
+      clearTimeout(this._telemetryTimer);
+      this._telemetryTimer = null;
+    }
+    this._telemetryPending = false;
+    this._lastTelemetryTime = Date.now();
+
+    const kbps = this._calculateThroughput();
+    this.telemetry.throughputKbps = kbps;
+    this.telemetry.throughputRate = kbps;
+    this.telemetry.parserState = this.parserState;
+    this.telemetry.status = this.status;
+
+    const payload = {
+      type: 'telemetry',
+      packetCount: this.telemetry.packetCount,
+      chunkCount: this.telemetry.chunkCount,
+      byteCount: this.telemetry.byteCount,
+      totalBytes: this.telemetry.totalBytes,
+      throughputKbps: this.telemetry.throughputKbps,
+      throughputRate: this.telemetry.throughputRate,
+      parserState: this.parserState,
+      status: this.status,
+      timestamp: this._lastTelemetryTime,
+    };
+
+    this.emit('telemetry', payload);
+
+    // Schedule decay check if throughput is active so it resets to 0.0 KB/s on stream pause
+    if (this._decayTimer) {
+      clearTimeout(this._decayTimer);
+      this._decayTimer = null;
+    }
+    if (kbps > 0) {
+      this._decayTimer = setTimeout(() => {
+        this._decayTimer = null;
+        if (this._calculateThroughput() === 0 && this.telemetry.throughputKbps > 0) {
+          this._emitTelemetry();
+        }
+      }, 1050);
+    }
+  }
+
+  /**
+   * Schedule throttled telemetry emission (10 Hz = 100ms)
+   * @private
+   */
+  _scheduleTelemetryEmission() {
+    if (this._telemetryPending) return;
+    const now = Date.now();
+    const elapsed = now - this._lastTelemetryTime;
+    if (elapsed >= 100) {
+      this._emitTelemetry();
+    } else {
+      this._telemetryPending = true;
+      this._telemetryTimer = setTimeout(() => {
+        this._telemetryPending = false;
+        this._emitTelemetry();
+      }, 100 - elapsed);
+    }
+  }
+
+  /**
+   * Record chunk ingestion in telemetry
+   * @param {number} byteLength
+   * @private
+   */
+  _recordChunkTelemetry(byteLength) {
+    const validBytes = typeof byteLength === 'number' && !Number.isNaN(byteLength) && byteLength > 0
+      ? Math.min(byteLength, 10 * 1024 * 1024)
+      : 0;
+    this.telemetry.packetCount++;
+    this.telemetry.chunkCount = this.telemetry.packetCount;
+    this.telemetry.byteCount += validBytes;
+    this.telemetry.totalBytes = this.telemetry.byteCount;
+
+    const now = Date.now();
+    this._recentBytes.push({ time: now, bytes: validBytes });
+    const cutoff = now - 1000;
+    let removeCount = 0;
+    while (removeCount < this._recentBytes.length && this._recentBytes[removeCount].time < cutoff) {
+      removeCount++;
+    }
+    if (removeCount > 0) {
+      this._recentBytes.splice(0, removeCount);
+    }
+    if (this._recentBytes.length > 2000) {
+      this._recentBytes = this._recentBytes.slice(-1000);
+    }
+
+    if (this._decayTimer) {
+      clearTimeout(this._decayTimer);
+      this._decayTimer = null;
+    }
+
+    this._scheduleTelemetryEmission();
+  }
+
+  /**
+   * Safely decode payload across binary Buffer, byte array, or base64 string formats
+   * @param {any} payload
+   * @returns {Buffer|null}
+   * @private
+   */
+  _decodePayload(payload) {
+    if (!payload) return null;
+    try {
+      if (Buffer.isBuffer(payload)) {
+        return payload.length > 0 ? payload : null;
+      }
+      if (payload instanceof Uint8Array) {
+        return payload.byteLength > 0 ? Buffer.from(payload.buffer, payload.byteOffset, payload.byteLength) : null;
+      }
+      if (Array.isArray(payload)) {
+        return payload.length > 0 ? Buffer.from(payload) : null;
+      }
+      if (typeof payload === 'string') {
+        const trimmed = payload.trim();
+        if (trimmed.length === 0) return null;
+        const buf = Buffer.from(trimmed, 'base64');
+        return buf.length > 0 ? buf : null;
+      }
+      if (typeof payload === 'object' && payload.data && (Array.isArray(payload.data) || Buffer.isBuffer(payload.data) || payload.data instanceof Uint8Array)) {
+        const buf = Buffer.from(payload.data);
+        return buf.length > 0 ? buf : null;
+      }
+    } catch (_) {
+      return null;
+    }
+    return null;
+  }
+
+  /**
+   * Normalize broadcaster and relay schema variations
+   * @param {Object} b
+   * @returns {Object}
+   * @private
+   */
+  _normalizeBroadcast(b) {
+    if (!b || typeof b !== 'object') return b;
+    const broadcastId = b.broadcastId || b.id || b.broadcast_id || null;
+    const target = b.target || b.viewerKey || b.spectatorId || b.viewer_key || b.spectator_id || b.key || null;
+    let rawBroadcaster = b.broadcaster || b.player || b.user || {};
+    if (typeof rawBroadcaster === 'string') {
+      rawBroadcaster = { displayName: rawBroadcaster };
+    }
+    const displayName = rawBroadcaster.displayName || rawBroadcaster.name || b.displayName || b.broadcasterName || 'Player';
+    const connectCode = rawBroadcaster.connectCode || rawBroadcaster.code || b.connectCode || b.broadcasterCode || b.code || null;
+
+    return {
+      ...b,
+      broadcastId,
+      id: broadcastId,
+      target,
+      viewerKey: target,
+      spectatorId: target,
+      broadcaster: {
+        ...rawBroadcaster,
+        displayName,
+        connectCode,
+      },
+    };
   }
 
   /**
    * Initialize or reset the SlpStream parser
    */
   _initSlpStream() {
+    this._handshakeBuffer = Buffer.alloc(0);
+    this.currentMatchChunks = [];
     if (this.slpStream) {
       if (this._commandListener) {
         this.slpStream.removeListener(SlpStreamEvent.COMMAND, this._commandListener);
@@ -103,6 +352,7 @@ export class BroadcastService extends EventEmitter {
     this._commandListener = ({ command, payload }) => {
       if (command === Command.GAME_START) {
         this.currentGame = this._normalizeGameStart(payload);
+        this.parserState = BroadcastState.IN_GAME;
         this._setStatus(BroadcastState.IN_GAME);
         this.emit('gameStart', this.currentGame);
       } else if (command === Command.GAME_END) {
@@ -117,9 +367,13 @@ export class BroadcastService extends EventEmitter {
         const nextStatus = this.ws && this.ws.readyState === WebSocket.OPEN
           ? (this.currentBroadcastId ? BroadcastState.CONNECTED : BroadcastState.LISTENING)
           : BroadcastState.IDLE;
+        if (this.currentBroadcastId) {
+          this.parserState = BroadcastState.MENUS_ACTIVE;
+        }
         this._setStatus(nextStatus);
 
         this.emit('gameEnd', { previousGame: endedGame, endPayload: payload });
+        this._emitTelemetry(true);
 
         // Auto-archive and upload asynchronously
         if (this.autoArchive && matchChunks.length > 0) {
@@ -176,6 +430,22 @@ export class BroadcastService extends EventEmitter {
     const fullBuffer = Buffer.concat(chunks);
     if (fullBuffer.length < 50) return; // Ignore truncated or tiny buffers
 
+    const UBJSON_SIG = Buffer.from([0x7b, 0x55, 0x03, 0x72, 0x61, 0x77, 0x5b, 0x24, 0x55, 0x23, 0x6c]);
+    let cleanBuffer = fullBuffer;
+    const ubjsonIdx = fullBuffer.indexOf(UBJSON_SIG);
+
+    if (ubjsonIdx !== -1) {
+      cleanBuffer = fullBuffer.subarray(ubjsonIdx);
+    } else {
+      const cmd35Idx = fullBuffer.indexOf(0x35);
+      if (cmd35Idx === -1) return; // Not a valid Slippi replay stream
+      const rawEvents = fullBuffer.subarray(cmd35Idx);
+      const header = Buffer.alloc(15);
+      header.write('{U\x03raw[$U#l', 0, 11, 'ascii');
+      header.writeUInt32BE(rawEvents.length, 11);
+      cleanBuffer = Buffer.concat([header, rawEvents]);
+    }
+
     const tempDir = path.resolve(process.cwd(), 'temp_slp');
     if (!fs.existsSync(tempDir)) {
       fs.mkdirSync(tempDir, { recursive: true });
@@ -187,7 +457,7 @@ export class BroadcastService extends EventEmitter {
     this.activeArchives++;
     try {
       // 1. Stage raw .slp temporarily in ./temp_slp/
-      fs.writeFileSync(tempFilePath, fullBuffer);
+      fs.writeFileSync(tempFilePath, cleanBuffer);
 
       // 2. Local Dual-Storage Persistence (SQLite + date-sharded .json.gz)
       if (!this.frameConsumer) {
@@ -234,14 +504,101 @@ export class BroadcastService extends EventEmitter {
 
   /**
    * Processes a raw Slippi binary chunk directly
-   * @param {Buffer} chunk
+   * @param {Buffer|Uint8Array|Array|string} rawChunk
    */
-  processRawChunk(chunk) {
+  processRawChunk(rawChunk) {
+    const chunk = this._decodePayload(rawChunk);
+    if (!chunk || chunk.length === 0) return;
+
     if (!this.slpStream) {
       this._initSlpStream();
     }
+
+    this._recordChunkTelemetry(chunk.length);
+
+    // Detect pre-match stream frames when connected prior to match launch
+    if (this.status !== BroadcastState.IN_GAME &&
+        (this.status === BroadcastState.CONNECTED || this.status === BroadcastState.CONNECTED_TO_STREAM) &&
+        this.parserState === BroadcastState.CONNECTED_TO_STREAM) {
+      this.parserState = BroadcastState.MENUS_ACTIVE;
+      this._setStatus(BroadcastState.MENUS_ACTIVE);
+    }
+
+    // Handshake Chunk Buffering (AGENTS.md Rule 8):
+    // Slippi binary streams may arrive fragmented down to 1 byte. Ingestion buffers
+    // must accumulate incoming chunks until the full 0x35 MESSAGE_SIZES / gameStart
+    // payload header is parsed, preventing DataView RangeError inside SlpStream.
+    if (!this.slpStream.payloadSizes) {
+      this._handshakeBuffer = Buffer.concat([this._handshakeBuffer, chunk]);
+
+      // Guard against unbounded memory growth from hostile or noisy streams (Cap at 64 KB)
+      const MAX_HANDSHAKE_BUFFER = 65536;
+      if (this._handshakeBuffer.length > MAX_HANDSHAKE_BUFFER) {
+        const pIdx = this._handshakeBuffer.indexOf(0x35);
+        if (pIdx === -1) {
+          // No 0x35 found in 64 KB; retain only latest 1024 bytes
+          this._handshakeBuffer = this._handshakeBuffer.subarray(this._handshakeBuffer.length - 1024);
+        } else if (pIdx > 0) {
+          // Discard garbage prefix before 0x35
+          this._handshakeBuffer = this._handshakeBuffer.subarray(pIdx);
+        }
+      }
+
+      const idx = this._handshakeBuffer.indexOf(0x35);
+      if (idx === -1 || this._handshakeBuffer.length < idx + 2) {
+        return;
+      }
+      const msgSizesLen = this._handshakeBuffer[idx + 1];
+      if (this._handshakeBuffer.length < idx + 2 + msgSizesLen) {
+        return;
+      }
+
+      // Detect start of match payload (look for UBJSON signature {U\x03raw[$U#l prior to 0x35)
+      const UBJSON_SIG = Buffer.from([0x7b, 0x55, 0x03, 0x72, 0x61, 0x77, 0x5b, 0x24, 0x55, 0x23, 0x6c]);
+      const ubjsonOffset = this._handshakeBuffer.lastIndexOf(UBJSON_SIG, idx);
+      const matchStartOffset = ubjsonOffset !== -1 ? ubjsonOffset : idx;
+
+      const buffered = this._handshakeBuffer.subarray(matchStartOffset);
+      this._handshakeBuffer = Buffer.alloc(0);
+      this.currentMatchChunks = [buffered];
+
+      try {
+        this.slpStream.process(buffered);
+      } catch (err) {
+        console.warn('[BroadcastService] SlpStream handshake parse error:', err.message);
+      }
+      return;
+    }
+
     this.currentMatchChunks.push(chunk);
-    this.slpStream.process(chunk);
+
+    try {
+      this.slpStream.process(chunk);
+    } catch (err) {
+      console.warn('[BroadcastService] SlpStream process error:', err.message);
+    }
+  }
+
+  /**
+   * Processes a menu_event payload (Character Select / Stage Select frames)
+   * @param {any} payload
+   */
+  processMenuEvent(payload) {
+    const chunk = this._decodePayload(payload);
+    const byteLength = chunk ? chunk.length : (typeof payload === 'string' ? payload.length : 1);
+    this._recordChunkTelemetry(byteLength);
+
+    if (this.status !== BroadcastState.IN_GAME) {
+      this.parserState = BroadcastState.MENUS_ACTIVE;
+      this._setStatus(BroadcastState.MENUS_ACTIVE);
+      if (!this._menuActiveEmitted) {
+        this._menuActiveEmitted = true;
+        this.emit('menuActive', {
+          timestamp: new Date().toISOString(),
+          broadcaster: this.currentBroadcaster,
+        });
+      }
+    }
   }
 
   /**
@@ -284,6 +641,18 @@ export class BroadcastService extends EventEmitter {
     this.currentBroadcastId = null;
     this.currentBroadcaster = null;
     this.activeBroadcasts = [];
+    this.telemetry = {
+      packetCount: 0,
+      chunkCount: 0,
+      byteCount: 0,
+      totalBytes: 0,
+      throughputKbps: 0,
+      throughputRate: 0,
+      parserState: BroadcastState.CONNECTING,
+      status: BroadcastState.CONNECTING,
+    };
+    this._recentBytes = [];
+    this._lastTelemetryTime = Date.now();
 
     this._initSlpStream();
     this._setStatus(BroadcastState.CONNECTING);
@@ -306,7 +675,7 @@ export class BroadcastService extends EventEmitter {
           },
         });
       } catch (err) {
-        this._setStatus(BroadcastState.IDLE);
+        this.stopSession().catch(() => {});
         return reject(err);
       }
 
@@ -338,7 +707,7 @@ export class BroadcastService extends EventEmitter {
         this.emit('streamError', { error: err.message });
         if (!isSettled) {
           isSettled = true;
-          this._setStatus(BroadcastState.IDLE);
+          this.stopSession().catch(() => {});
           reject(err);
         }
       });
@@ -346,7 +715,7 @@ export class BroadcastService extends EventEmitter {
       this.ws.on('close', (code, reason) => {
         if (!isSettled) {
           isSettled = true;
-          this._setStatus(BroadcastState.IDLE);
+          this.stopSession().catch(() => {});
           reject(new Error(`WebSocket closed before connecting: code ${code} (${reason})`));
           return;
         }
@@ -354,7 +723,7 @@ export class BroadcastService extends EventEmitter {
         if (this.status !== BroadcastState.IDLE) {
           const wasInGame = this.status === BroadcastState.IN_GAME;
           const previousGame = this.currentGame;
-          this._setStatus(BroadcastState.IDLE);
+          this.stopSession().catch(() => {});
           if (wasInGame) {
             this.emit('gameEnd', { previousGame, reason: 'relay_disconnect' });
           }
@@ -384,31 +753,90 @@ export class BroadcastService extends EventEmitter {
    * @private
    */
   _handleWsMessage(rawData) {
-    let msg;
-    try {
-      const text = typeof rawData === 'string' ? rawData : rawData.toString('utf8');
-      msg = JSON.parse(text);
-    } catch (_) {
+    let msg = null;
+    let isBinary = false;
+
+    if (Array.isArray(rawData)) {
+      rawData = Buffer.concat(rawData.map((c) => Buffer.isBuffer(c) ? c : Buffer.from(c)));
+    } else if (rawData instanceof ArrayBuffer) {
+      rawData = Buffer.from(rawData);
+    } else if (rawData instanceof Uint8Array && !Buffer.isBuffer(rawData)) {
+      rawData = Buffer.from(rawData.buffer, rawData.byteOffset, rawData.byteLength);
+    }
+
+    if (Buffer.isBuffer(rawData)) {
+      const firstByte = rawData[0];
+      if (firstByte === 0x7b || firstByte === 0x5b) { // '{' or '['
+        try {
+          msg = JSON.parse(rawData.toString('utf8'));
+        } catch (_) {
+          isBinary = true;
+        }
+      } else {
+        isBinary = true;
+      }
+    } else if (typeof rawData === 'string') {
+      try {
+        msg = JSON.parse(rawData);
+      } catch (_) {
+        const trimmed = rawData.trim();
+        if (trimmed.length > 0 && /^[A-Za-z0-9+/=]+$/.test(trimmed) && trimmed.length % 4 === 0) {
+          try {
+            const buf = Buffer.from(trimmed, 'base64');
+            if (buf.length > 0) {
+              this.processRawChunk(buf);
+              return;
+            }
+          } catch (_) {}
+        }
+        return;
+      }
+    }
+
+    if (isBinary && Buffer.isBuffer(rawData)) {
+      this.processRawChunk(rawData);
       return;
     }
 
+    if (!msg) return;
+
+    if (Array.isArray(msg)) {
+      for (const item of msg) {
+        this._handleSingleMessage(item);
+      }
+      return;
+    }
+
+    this._handleSingleMessage(msg);
+  }
+
+  /**
+   * Process a single normalized relay message object
+   * @param {Object} msg
+   * @private
+   */
+  _handleSingleMessage(msg) {
     if (!msg || typeof msg !== 'object') return;
 
     switch (msg.type) {
       case 'list-broadcasts-resp': {
-        const broadcasts = Array.isArray(msg.broadcasts) ? msg.broadcasts : [];
+        const rawList = Array.isArray(msg.broadcasts)
+          ? msg.broadcasts
+          : (Array.isArray(msg.data) ? msg.data : []);
+        const broadcasts = rawList.map((b) => this._normalizeBroadcast(b));
         this.activeBroadcasts = broadcasts;
         this.emit('broadcastsUpdated', broadcasts);
 
         // If auto-follow is active and we are not watching a match, check for targets
         if (this.autoFollow && !this.currentBroadcastId && broadcasts.length > 0) {
-          // Look for broadcasts targeting our spectator ID
-          const targeted = broadcasts.find(
-            (b) => b.target && b.target.toLowerCase() === (this.auth.fbUid || '').toLowerCase()
-          );
+          const myUid = (this.auth.fbUid || '').toLowerCase();
+          const targeted = broadcasts.find((b) => {
+            const tgt = (b.target || b.viewerKey || b.spectatorId || '').toLowerCase();
+            return tgt && tgt === myUid;
+          });
           const toWatch = targeted || broadcasts[0];
-          if (toWatch && toWatch.broadcastId) {
-            this.watchBroadcast(toWatch.broadcastId);
+          if (toWatch && (toWatch.broadcastId || toWatch.id)) {
+            this.watchBroadcast(toWatch.broadcastId || toWatch.id);
           }
         }
         break;
@@ -416,20 +844,63 @@ export class BroadcastService extends EventEmitter {
 
       case 'watch-broadcast-resp': {
         if (msg.success !== false) {
-          this.currentBroadcastId = msg.broadcastId || this.currentBroadcastId;
-          const matchBrd = this.activeBroadcasts.find((b) => b.broadcastId === this.currentBroadcastId);
-          this.currentBroadcaster = matchBrd ? (matchBrd.broadcaster || null) : null;
+          const respId = msg.broadcastId || msg.id || msg.broadcast_id || this.currentBroadcastId;
+          if (respId !== this.currentBroadcastId) {
+            this.currentGame = null;
+            this.currentMatchChunks = [];
+            this._initSlpStream();
+          }
+          this.currentBroadcastId = respId;
+          const matchBrd = this.activeBroadcasts.find(
+            (b) => b.broadcastId === this.currentBroadcastId || b.id === this.currentBroadcastId
+          );
+          if (matchBrd && matchBrd.broadcaster) {
+            this.currentBroadcaster = matchBrd.broadcaster;
+          }
+          this.parserState = BroadcastState.CONNECTED_TO_STREAM;
           this._setStatus(BroadcastState.CONNECTED);
+        } else {
+          this.currentBroadcastId = null;
+          this.currentBroadcaster = null;
+          this._initSlpStream();
+          this.parserState = BroadcastState.LISTENING;
+          this._setStatus(BroadcastState.LISTENING);
+          this.emit('streamError', { error: msg.error || 'Failed to watch broadcast' });
         }
+        break;
+      }
+
+      case 'game_event': {
+        const rawPayload = msg.payload !== undefined ? msg.payload : msg.data;
+        if (rawPayload !== undefined) {
+          const chunk = this._decodePayload(rawPayload);
+          if (chunk) this.processRawChunk(chunk);
+        }
+        break;
+      }
+
+      case 'menu_event': {
+        const rawPayload = msg.payload !== undefined ? msg.payload : msg.data;
+        this.processMenuEvent(rawPayload);
         break;
       }
 
       case 'events': {
         if (Array.isArray(msg.events)) {
           for (const ev of msg.events) {
-            if (ev.type === 'game_event' && typeof ev.payload === 'string') {
-              const chunk = Buffer.from(ev.payload, 'base64');
-              this.processRawChunk(chunk);
+            if (!ev) continue;
+            if (typeof ev === 'object') {
+              const evType = ev.type || 'game_event';
+              const rawPayload = ev.payload !== undefined ? ev.payload : (ev.data !== undefined ? ev.data : ev);
+              if (evType === 'game_event') {
+                const chunk = this._decodePayload(rawPayload);
+                if (chunk) this.processRawChunk(chunk);
+              } else if (evType === 'menu_event') {
+                this.processMenuEvent(rawPayload);
+              }
+            } else {
+              const chunk = this._decodePayload(ev);
+              if (chunk) this.processRawChunk(chunk);
             }
           }
         }
@@ -438,13 +909,15 @@ export class BroadcastService extends EventEmitter {
 
       case 'broadcast-ended':
       case 'stream-ended': {
-        if (!msg.broadcastId || msg.broadcastId === this.currentBroadcastId) {
+        const brdId = msg.broadcastId || msg.id;
+        if (!brdId || brdId === this.currentBroadcastId) {
           this.currentBroadcastId = null;
           this.currentBroadcaster = null;
           const wasInGame = this.status === BroadcastState.IN_GAME;
           const previousGame = this.currentGame;
           this.currentGame = null;
           this._initSlpStream();
+          this.parserState = BroadcastState.LISTENING;
           this._setStatus(BroadcastState.LISTENING);
           if (wasInGame) {
             this.emit('gameEnd', { previousGame, reason: 'broadcast-ended' });
@@ -460,13 +933,31 @@ export class BroadcastService extends EventEmitter {
 
   /**
    * Explicitly watch a specific broadcast ID
-   * @param {string} broadcastId
+   * @param {string|Object} broadcastInput
    */
-  watchBroadcast(broadcastId) {
+  watchBroadcast(broadcastInput) {
+    if (!broadcastInput) return;
+    const broadcastId = typeof broadcastInput === 'string'
+      ? broadcastInput
+      : (broadcastInput.broadcastId || broadcastInput.id || broadcastInput.broadcast_id || null);
     if (!broadcastId) return;
+
+    if (broadcastId !== this.currentBroadcastId || this.currentGame || this.currentMatchChunks.length > 0) {
+      this.currentGame = null;
+      this.currentMatchChunks = [];
+      this._initSlpStream();
+    }
+
     this.currentBroadcastId = broadcastId;
-    const matchBrd = this.activeBroadcasts.find((b) => b.broadcastId === broadcastId);
-    this.currentBroadcaster = matchBrd ? (matchBrd.broadcaster || null) : null;
+    const matchBrd = this.activeBroadcasts.find(
+      (b) => b.broadcastId === broadcastId || b.id === broadcastId
+    );
+    this.currentBroadcaster = matchBrd?.broadcaster ||
+      (typeof broadcastInput === 'object' && broadcastInput.broadcaster ? broadcastInput.broadcaster : null) ||
+      this.currentBroadcaster ||
+      null;
+    this.parserState = BroadcastState.CONNECTED_TO_STREAM;
+    this._setStatus(BroadcastState.CONNECTED);
     this._sendWsMessage({
       type: 'watch-broadcast',
       broadcastId,
@@ -486,6 +977,17 @@ export class BroadcastService extends EventEmitter {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
     }
+    if (this._telemetryTimer) {
+      clearTimeout(this._telemetryTimer);
+      this._telemetryTimer = null;
+    }
+    if (this._decayTimer) {
+      clearTimeout(this._decayTimer);
+      this._decayTimer = null;
+    }
+    this._telemetryPending = false;
+    this._recentBytes = [];
+    this._handshakeBuffer = Buffer.alloc(0);
 
     if (this.ws) {
       try {
@@ -508,6 +1010,7 @@ export class BroadcastService extends EventEmitter {
 
     const previousStatus = this.status;
     this.status = BroadcastState.IDLE;
+    this.parserState = BroadcastState.IDLE;
     this.sessionId = null;
     this.currentBroadcastId = null;
     this.currentBroadcaster = null;
@@ -516,15 +1019,32 @@ export class BroadcastService extends EventEmitter {
     this.activeBroadcasts = [];
     this.sessionStartTime = null;
 
+    this.telemetry = {
+      packetCount: 0,
+      chunkCount: 0,
+      byteCount: 0,
+      totalBytes: 0,
+      throughputKbps: 0,
+      throughputRate: 0,
+      parserState: BroadcastState.IDLE,
+      status: BroadcastState.IDLE,
+    };
+
     if (previousStatus !== BroadcastState.IDLE) {
       this.emit('statusChange', {
         status: BroadcastState.IDLE,
+        parserState: BroadcastState.IDLE,
         previousStatus,
         sessionId: null,
         spectatorId: this.auth.fbUid,
-        broadcastKey: this.auth.fbUid,
+        broadcastKey: this.auth.fbUid || null,
         currentBroadcaster: null,
         currentGame: null,
+      });
+      this.emit('telemetry', {
+        type: 'telemetry',
+        ...this.telemetry,
+        timestamp: Date.now(),
       });
     }
 
@@ -541,10 +1061,21 @@ export class BroadcastService extends EventEmitter {
 
     return {
       sessionId: this.sessionId,
-      broadcastKey: spectatorId || 'NO ACTIVE SESSION',
+      broadcastKey: spectatorId || null,
       spectatorId,
       account: creds,
       status: this.status,
+      parserState: this.parserState,
+      telemetry: {
+        packetCount: this.telemetry.packetCount,
+        chunkCount: this.telemetry.chunkCount,
+        byteCount: this.telemetry.byteCount,
+        totalBytes: this.telemetry.totalBytes,
+        throughputKbps: this._calculateThroughput(),
+        throughputRate: this._calculateThroughput(),
+        parserState: this.parserState,
+        status: this.status,
+      },
       activeBroadcasts: this.activeBroadcasts,
       currentBroadcastId: this.currentBroadcastId,
       currentBroadcaster: this.currentBroadcaster,

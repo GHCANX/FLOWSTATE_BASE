@@ -11,6 +11,7 @@
     "test:watch": "node --no-warnings --test --test-concurrency=1 --watch \"test/unit/*.test.js\" \"test/integration/*.test.js\" \"test/e2e/*.test.js\"",
     "test:coverage": "node --no-warnings --test --test-concurrency=1 --experimental-test-coverage \"test/unit/*.test.js\" \"test/integration/*.test.js\" \"test/e2e/*.test.js\"",
     "test:legacy": "node --no-warnings test/stage1_local_test.js && node --no-warnings test/server_test.js && node --no-warnings test/broadcast_spectator_test.js && node --no-warnings test/habit_analysis_test.js",
+    "test:telemetry": "node --no-warnings test/broadcast_telemetry_test.js",
     "lint": "eslint src/ test/",
     "lint:fix": "eslint src/ test/ --fix",
     "cli": "node --no-warnings src/cli.js",

@@ -429,6 +429,25 @@
                     <span>Upload to Lunar Melee</span>
                   </label>
                 </div>
+
+                <!-- Live Stream Health & Telemetry -->
+                <div class="spectator-telemetry-panel" id="spectator-telemetry-panel">
+                  <div class="telemetry-cell">
+                    <span class="telemetry-cell-label">HEALTH</span>
+                    <div id="spectator-health-badge" class="badge-status idle">
+                      <span class="badge-dot"></span>
+                      <span id="spectator-health-text">OFFLINE</span>
+                    </div>
+                  </div>
+                  <div class="telemetry-cell">
+                    <span class="telemetry-cell-label">PACKETS</span>
+                    <span id="spectator-packet-counter" class="telemetry-cell-val">0</span>
+                  </div>
+                  <div class="telemetry-cell">
+                    <span class="telemetry-cell-label">RATE</span>
+                    <span id="spectator-throughput-val" class="telemetry-cell-val">0.0 KB/s</span>
+                  </div>
+                </div>
               </div>
 
               <!-- Active Broadcasters Card -->
@@ -814,6 +833,60 @@
               <p class="waiting-desc" id="waiting-desc-text">
                 Spectator listener is active. Once both players select characters and stage, live match data will appear immediately.
               </p>
+            </div>
+
+            <!-- State Pre-Game: Active Pre-Game Dashboard -->
+            <div id="match-pregame-state" class="match-pregame-container hidden">
+              <div class="pregame-header-banner">
+                <div class="pregame-broadcaster-info">
+                  <span class="pregame-sublabel">BROADCASTER</span>
+                  <div class="pregame-broadcaster-row">
+                    <span class="pregame-broadcaster-name" id="pregame-broadcaster-name">Broadcaster</span>
+                    <span class="pregame-broadcaster-code" id="pregame-broadcaster-code">(CODE#000)</span>
+                  </div>
+                </div>
+                <div class="pregame-badge-wrap">
+                  <div class="badge-status-animated pulse-glow" id="pregame-status-badge">
+                    <span class="badge-dot"></span>
+                    <span id="pregame-status-badge-text">Character Select / Stage Select in Progress — Awaiting Match Start (0x35)</span>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Telemetry Metrics Grid -->
+              <div class="pregame-metrics-grid">
+                <div class="pregame-metric-card">
+                  <span class="pregame-metric-label">STREAM STATUS</span>
+                  <span class="pregame-metric-val status-accent" id="pregame-stream-status">ACTIVE</span>
+                </div>
+                <div class="pregame-metric-card">
+                  <span class="pregame-metric-label">CHUNKS INGESTED</span>
+                  <span class="pregame-metric-val" id="pregame-chunk-counter">0</span>
+                </div>
+                <div class="pregame-metric-card">
+                  <span class="pregame-metric-label">THROUGHPUT</span>
+                  <span class="pregame-metric-val" id="pregame-throughput">0.0 KB/s</span>
+                </div>
+                <div class="pregame-metric-card">
+                  <span class="pregame-metric-label">STREAM UPTIME</span>
+                  <span class="pregame-metric-val" id="pregame-uptime">00:00</span>
+                </div>
+              </div>
+
+              <!-- Scanning Visualizer -->
+              <div class="pregame-scanner-container">
+                <div class="scanner-sweep-line"></div>
+                <div class="scanner-body">
+                  <div class="scanner-icon">⚡</div>
+                  <div class="scanner-info">
+                    <span class="scanner-title">Live Stream Ingestion Active</span>
+                    <span class="scanner-subtitle" id="pregame-scanner-desc">
+                      Receiving stream chunks directly in memory. Checking for stage and player selections...
+                    </span>
+                  </div>
+                  <div class="scanner-zero-disk-pill">Zero Disk Footprint ✓</div>
+                </div>
+              </div>
             </div>
 
             <!-- State B: Active Live Match Card -->
