@@ -187,8 +187,10 @@ describe('Broadcast Spectator E2E', () => {
     // Connect SSE client and wait for connection to be established
     const sseEvents = [];
     let sseResolve;
-    const ssePromise = new Promise((resolve) => {
+    let sseReject;
+    const ssePromise = new Promise((resolve, reject) => {
       sseResolve = resolve;
+      sseReject = reject;
     });
 
     let sseReadyResolve;
@@ -213,6 +215,7 @@ describe('Broadcast Spectator E2E', () => {
                 const parsed = JSON.parse(trimmed.slice(6));
                 sseEvents.push(parsed);
                 if (parsed.type === 'gameStart') {
+                  clearTimeout(sseTimeout);
                   sseResolve();
                 }
               } catch (_) {}
