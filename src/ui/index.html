@@ -47,12 +47,17 @@
           <button class="tab-btn" role="tab" aria-selected="false" data-tab="history">Jobs / History</button>
           <button class="tab-btn" role="tab" aria-selected="false" data-tab="player">Player Scout</button>
           <button class="tab-btn" role="tab" aria-selected="false" data-tab="game">Replay Inspector</button>
-          <button class="tab-btn" role="tab" aria-selected="false" data-tab="overview">Overview</button>
-          <button class="tab-btn" role="tab" aria-selected="false" data-tab="status">Status</button>
-          <button class="tab-btn" role="tab" aria-selected="false" data-tab="export">Export</button>
-          <button class="tab-btn" role="tab" aria-selected="false" data-tab="custom">Custom</button>
           <button class="tab-btn" role="tab" aria-selected="false" data-tab="spectate">Live Spectate</button>
-          <button class="tab-btn" role="tab" aria-selected="false" data-tab="sprites">Move Sprites</button>
+          <details class="more-tools-menu">
+            <summary class="tab-btn more-tools-summary">More tools <span aria-hidden="true">⌄</span></summary>
+            <div class="more-tools-popover" role="menu" aria-label="More command tools">
+              <button class="tab-btn" role="menuitem" aria-selected="false" data-tab="overview">Overview</button>
+              <button class="tab-btn" role="menuitem" aria-selected="false" data-tab="status">Status</button>
+              <button class="tab-btn" role="menuitem" aria-selected="false" data-tab="export">Export</button>
+              <button class="tab-btn" role="menuitem" aria-selected="false" data-tab="custom">Custom</button>
+              <button class="tab-btn" role="menuitem" aria-selected="false" data-tab="sprites">Move Sprites</button>
+            </div>
+          </details>
         </nav>
 
         <!-- Command Form Panels -->
@@ -514,9 +519,12 @@
         <div class="command-preview-box">
           <div class="preview-header">
             <span class="preview-label">LIVE COMMAND PREVIEW</span>
-            <button type="button" id="btn-copy-command" class="btn-secondary btn-sm" title="Copy to clipboard">
-              Copy Command 📋
-            </button>
+            <details class="preview-tools-menu">
+              <summary class="btn-secondary btn-sm">Command options <span aria-hidden="true">⌄</span></summary>
+              <div class="preview-tools-popover">
+                <button type="button" id="btn-copy-command" class="btn-secondary btn-sm" title="Copy to clipboard">Copy command</button>
+              </div>
+            </details>
           </div>
           <pre class="preview-code"><code id="command-preview-text">node src/cli.js matchup fox marth</code></pre>
           
@@ -895,16 +903,17 @@
               <button type="button" id="btn-abort" class="btn-danger btn-sm" disabled title="Cancel running command (SIGINT)">
                 ■ Abort
               </button>
-              <button type="button" id="btn-clear-term" class="btn-secondary btn-sm" title="Clear console output">
-                Clear
-              </button>
-              <button type="button" id="btn-copy-output" class="btn-secondary btn-sm" title="Copy console logs to clipboard">
-                Copy Output 📋
-              </button>
+              <details class="console-tools-menu">
+                <summary class="btn-secondary btn-sm">Console options <span aria-hidden="true">⌄</span></summary>
+                <div class="console-tools-popover">
+                  <button type="button" id="btn-clear-term" class="btn-secondary btn-sm" title="Clear console output">Clear output</button>
+                  <button type="button" id="btn-copy-output" class="btn-secondary btn-sm" title="Copy console logs to clipboard">Copy output</button>
+                </div>
+              </details>
               <div class="tray-size-controls" role="group" aria-label="Console Tray Height Controls">
-                <button type="button" id="btn-tray-min" class="btn-tray-icon" title="Minimize Tray (38px)">—</button>
-                <button type="button" id="btn-tray-default" class="btn-tray-icon active" title="Default Height (200px)">◻</button>
-                <button type="button" id="btn-tray-max" class="btn-tray-icon" title="Maximize Tray (60%)">⤢</button>
+                <button type="button" id="btn-tray-min" class="btn-tray-icon" title="Minimize console">Min</button>
+                <button type="button" id="btn-tray-default" class="btn-tray-icon active" title="Use compact console">Compact</button>
+                <button type="button" id="btn-tray-max" class="btn-tray-icon" title="Expand console">Expand</button>
               </div>
             </div>
           </div>
