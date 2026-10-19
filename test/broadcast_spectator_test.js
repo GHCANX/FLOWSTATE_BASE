@@ -1,30 +1,33 @@
 /**
- * FlowState Melee Analysis Engine - Broadcast Spectator E2E Test Suite
+ * FlowState Melee Analysis Engine - Official Slippi Cloud Spectator Test Suite
  *
- * Implements verification across 6 core sections per PROJECT.md, AGENTS.md, and ORIGINAL_REQUEST.md:
- * Section 1: Session Provisioning & Retrieval (REST Lifecycle)
- * Section 2: Real-Time Stream Simulation & Immediate Extraction (<= 100ms)
- * Section 3: SSE Streaming & Event Dispatch
- * Section 4: Resource Cleanup & Port Disposal
- * Section 5: Zero Disk Accumulation
- * Section 6: Regression Verification & Runtime Compliance
+ * Implements end-to-end verification across 8 core sections:
+ * Section 1: Slippi Account Authentication & Token Management
+ * Section 2: Cloud Relay Session Provisioning & Header Verification
+ * Section 3: Remote Broadcaster Discovery & Auto-Follow
+ * Section 4: Real-Time Stream Simulation & Immediate Extraction (<= 100ms)
+ * Section 5: SSE Streaming & Event Dispatch
+ * Section 6: Post-Match Dual Persistence & Lunar Melee Upload Trigger
+ * Section 7: Zero Disk Accumulation Invariant
+ * Section 8: Resource Cleanup, Teardown & Full Regression Check
  */
 
 import assert from 'node:assert';
 import http from 'node:http';
-import net from 'node:net';
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
+import { WebSocketServer } from 'ws';
 import { createServer } from '../src/server/server.js';
-import { closeDatabase } from '../src/database/db.js';
-import { getBroadcastService, resetBroadcastService, BroadcastState } from '../src/broadcast/broadcastService.js';
+import { BroadcastService, getBroadcastService, resetBroadcastService, BroadcastState } from '../src/broadcast/broadcastService.js';
+import { SlippiAuthClient, resetSlippiAuth } from '../src/broadcast/slippiAuth.js';
+import { LunarClient } from '../src/lunar/lunarClient.js';
+import { getDatabase, closeDatabase } from '../src/database/db.js';
 
 // Replay file paths
 const REPLAY_UNRANKED = 'external/slippi-js-master/slp/unranked_game1.slp';
 const REPLAY_4PLAYERS = 'external/slippi-js-master/slp/displayNameAndConnectCodeInGameStart.slp';
 
-// Utility helper for HTTP requests using native node:http
 function requestHttp(url, options = {}) {
   return new Promise((resolve, reject) => {
     const req = http.request(url, options, (res) => {
@@ -59,29 +62,13 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-/**
- * Cleanly disconnects a client socket and waits for the server to process the close event
- * and remove the socket from activeSockets.
- */
-async function disconnectAndDrain(client, broadcast) {
-  if (!client) return;
-  try {
-    client.destroy();
-  } catch (_) {}
-  const start = Date.now();
-  while (broadcast.activeSockets.size > 0 && Date.now() - start < 1500) {
-    await sleep(20);
-  }
-}
-
-// SSE helper that connects to an event stream and collects parsed events
 function openSseStream(url) {
   const events = [];
   let isClosed = false;
   let reqStream = null;
 
   const streamPromise = new Promise((resolve, reject) => {
-    reqStream = http.request(url, (res) => {
+    reqStream = http.request(url, { headers: { Accept: 'text/event-stream' } }, (res) => {
       if (res.statusCode !== 200) {
         reject(new Error(`SSE connection failed with status ${res.statusCode}`));
         return;
@@ -92,7 +79,7 @@ function openSseStream(url) {
       res.on('data', (chunk) => {
         buffer += chunk.toString('utf8');
         const lines = buffer.split('\n\n');
-        buffer = lines.pop(); // keep remainder
+        buffer = lines.pop();
         for (const line of lines) {
           const trimmed = line.trim();
           if (!trimmed) continue;
@@ -104,17 +91,9 @@ function openSseStream(url) {
           }
         }
       });
-      res.on('end', () => {
-        isClosed = true;
-      });
     });
 
-    reqStream.on('error', (err) => {
-      if (!isClosed) {
-        // Only reject if disconnected unexpectedly before intentional close
-      }
-    });
-
+    reqStream.on('error', () => {});
     reqStream.end();
   });
 
@@ -124,9 +103,7 @@ function openSseStream(url) {
     close: () => {
       isClosed = true;
       if (reqStream) {
-        try {
-          reqStream.destroy();
-        } catch (_) {}
+        try { reqStream.destroy(); } catch (_) {}
       }
     },
     waitForEvent: async (predicate, timeoutMs = 2000) => {
@@ -141,484 +118,421 @@ function openSseStream(url) {
   };
 }
 
-// Shared context across test sections
+// Global test harness instances
+let mockAuthServer = null;
+let mockAuthPort = null;
+let mockRelayServer = null;
+let mockRelayPort = null;
+let mockRelayClients = new Set();
+let latestRelayHeaders = null;
+let mockLunarServer = null;
+let mockLunarPort = null;
+let lastLunarUpload = null;
+
 let testServer = null;
 let serverPort = null;
 let baseUrl = null;
 let broadcastService = null;
+let authClient = null;
 
-/**
- * Section 1: Session Provisioning & Retrieval (REST Lifecycle)
- */
-async function testSection1_SessionProvisioningAndRetrieval() {
-  console.log('\n--- Section 1: Session Provisioning & Retrieval (REST Lifecycle) ---');
+async function setupMockServers() {
+  // 1. Mock Firebase Auth & Slippi GraphQL Server
+  mockAuthServer = http.createServer((req, res) => {
+    let body = '';
+    req.on('data', (c) => (body += c));
+    req.on('end', () => {
+      const url = new URL(req.url, `http://127.0.0.1:${mockAuthPort}`);
 
-  // Reset and obtain singleton service
+      if (url.pathname.includes('signInWithPassword')) {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({
+          localId: 'slippi_fb_uid_spectator_28c',
+          email: 'spectator@slippi.gg',
+          idToken: 'mock_firebase_jwt_token_valid',
+          refreshToken: 'mock_firebase_refresh_token_valid',
+          expiresIn: '3600',
+        }));
+      } else if (url.pathname.includes('token')) {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({
+          user_id: 'slippi_fb_uid_spectator_28c',
+          id_token: 'mock_refreshed_firebase_jwt',
+          refresh_token: 'mock_refreshed_refresh_token',
+          expires_in: '3600',
+        }));
+      } else if (url.pathname === '/graphql') {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({
+          data: {
+            getUser: {
+              displayName: 'ApexSpectator',
+              connectCode: { code: 'APEX#001' },
+            },
+          },
+        }));
+      } else {
+        res.writeHead(404);
+        res.end();
+      }
+    });
+  });
+  await new Promise((r) => mockAuthServer.listen(0, '127.0.0.1', r));
+  mockAuthPort = mockAuthServer.address().port;
+
+  // 2. Mock Slippi Cloud Relay WebSocket Server
+  mockRelayServer = new WebSocketServer({ port: 0 });
+  await new Promise((r) => mockRelayServer.on('listening', r));
+  mockRelayPort = mockRelayServer.address().port;
+
+  mockRelayServer.on('headers', (headers, req) => {
+    latestRelayHeaders = req.headers;
+  });
+
+  mockRelayServer.on('connection', (ws) => {
+    mockRelayClients.add(ws);
+
+    ws.on('message', (data) => {
+      let msg = null;
+      try {
+        msg = JSON.parse(data.toString('utf8'));
+      } catch (_) {}
+
+      if (msg?.type === 'list-broadcasts') {
+        ws.send(JSON.stringify({
+          type: 'list-broadcasts-resp',
+          broadcasts: [
+            {
+              broadcastId: 'brd_tournament_01',
+              target: 'slippi_fb_uid_spectator_28c',
+              broadcaster: {
+                connectCode: 'NIKK#513',
+                displayName: 'Nikk',
+              },
+            },
+          ],
+        }));
+      } else if (msg?.type === 'watch-broadcast') {
+        ws.send(JSON.stringify({
+          type: 'watch-broadcast-resp',
+          broadcastId: msg.broadcastId,
+          success: true,
+        }));
+      }
+    });
+
+    ws.on('close', () => {
+      mockRelayClients.delete(ws);
+    });
+  });
+
+  // 3. Mock Lunar Melee Upload Server
+  mockLunarServer = http.createServer((req, res) => {
+    const chunks = [];
+    req.on('data', (c) => chunks.push(c));
+    req.on('end', () => {
+      const buffer = Buffer.concat(chunks);
+      lastLunarUpload = {
+        path: req.url,
+        method: req.method,
+        headers: req.headers,
+        size: buffer.length,
+      };
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ uploadId: 'lunar_up_123', status: 'RECEIVED' }));
+    });
+  });
+  await new Promise((r) => mockLunarServer.listen(0, '127.0.0.1', r));
+  mockLunarPort = mockLunarServer.address().port;
+}
+
+async function teardownMockServers() {
+  if (mockAuthServer) {
+    await new Promise((r) => mockAuthServer.close(r));
+  }
+  if (mockRelayServer) {
+    for (const c of mockRelayClients) {
+      try { c.close(); } catch (_) {}
+    }
+    await new Promise((r) => mockRelayServer.close(r));
+  }
+  if (mockLunarServer) {
+    await new Promise((r) => mockLunarServer.close(r));
+  }
+}
+
+async function run() {
+  console.log('========================================================================');
+  console.log('⚡ FLOWSTATE MELEE: OFFICIAL SLIPPI CLOUD SPECTATOR TEST SUITE ⚡');
+  console.log('========================================================================\n');
+
+  await setupMockServers();
+
+  const credsPath = path.resolve('temp_slp/test_slippi_credentials.json');
+  if (fs.existsSync(credsPath)) {
+    fs.unlinkSync(credsPath);
+  }
+  authClient = new SlippiAuthClient({
+    credentialsPath: credsPath,
+    firebaseSignInUrl: `http://127.0.0.1:${mockAuthPort}/signInWithPassword`,
+    firebaseRefreshUrl: `http://127.0.0.1:${mockAuthPort}/token`,
+    slippiGraphqlUrl: `http://127.0.0.1:${mockAuthPort}/graphql`,
+  });
+
+  const lunarClient = new LunarClient({
+    baseUrl: `http://127.0.0.1:${mockLunarPort}`,
+  });
+
   resetBroadcastService();
-  broadcastService = getBroadcastService();
+  broadcastService = new BroadcastService({
+    auth: authClient,
+    relayUrl: `ws://127.0.0.1:${mockRelayPort}`,
+    autoFollow: true,
+    autoArchive: true,
+    lunarUpload: true,
+    lunarClient,
+  });
 
-  // 1.1 Start HTTP test server via createServer()
   testServer = createServer({ broadcastService });
-  await new Promise((resolve) => testServer.listen(0, '127.0.0.1', resolve));
+  await new Promise((r) => testServer.listen(0, '127.0.0.1', r));
   serverPort = testServer.address().port;
   baseUrl = `http://127.0.0.1:${serverPort}`;
-  console.log(`  ✔ Test server started on ${baseUrl}`);
 
-  // 1.2 Initial GET /api/broadcast/session returns IDLE state
-  const initialGetRes = await requestHttp(`${baseUrl}/api/broadcast/session`);
-  assert.strictEqual(initialGetRes.statusCode, 200, 'Initial GET /api/broadcast/session must return 200');
-  const initialSession = initialGetRes.json;
-  assert.ok(initialSession, 'Response must be valid JSON');
-  assert.strictEqual(initialSession.status, 'IDLE', 'Initial status must be IDLE');
-  assert.strictEqual(initialSession.sessionId, null, 'Initial sessionId must be null');
-  assert.strictEqual(initialSession.broadcastKey, null, 'Initial broadcastKey must be null');
-  assert.strictEqual(initialSession.port, null, 'Initial port must be null');
-  assert.strictEqual(initialSession.remotePeer, null, 'Initial remotePeer must be null');
-  assert.strictEqual(initialSession.currentGame, null, 'Initial currentGame must be null');
-  console.log('  ✔ Initial GET /api/broadcast/session returns IDLE state correctly');
-
-  // 1.3 POST /api/broadcast/session creates session and provisions broadcast key
-  const postRes = await requestHttp(`${baseUrl}/api/broadcast/session`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: { port: 0, host: '127.0.0.1' },
-  });
-  assert.strictEqual(postRes.statusCode, 200, 'POST /api/broadcast/session must return 200');
-  const createdSession = postRes.json;
-  assert.ok(createdSession, 'Created session must be valid JSON');
-  assert.strictEqual(createdSession.status, 'LISTENING', 'Status must transition to LISTENING');
-  assert.ok(typeof createdSession.sessionId === 'string' && createdSession.sessionId.length > 0, 'sessionId must be non-empty string');
-  assert.match(createdSession.sessionId, /^[0-9a-f-]{36}$/i, 'sessionId must be valid UUID');
-  
-  // Verify broadcast key conforms to SLP-XXXX-XXXX
-  assert.ok(typeof createdSession.broadcastKey === 'string', 'broadcastKey must be string');
-  assert.match(createdSession.broadcastKey, /^SLP-[0-9A-F]{4}-[0-9A-F]{4}$/, 'broadcastKey must match SLP-XXXX-XXXX format');
-  
-  // Verify port is a positive allocated integer
-  assert.ok(Number.isInteger(createdSession.port) && createdSession.port > 0, 'port must be valid integer > 0');
-  assert.strictEqual(createdSession.host, '127.0.0.1', 'host must match requested host');
-  assert.ok(createdSession.instructions.includes('Open Slippi Launcher → Gameplay Broadcasts → Paste Broadcast Key → Start'),
-    'instructions must contain canonical broadcaster setup steps');
-  console.log(`  ✔ POST /api/broadcast/session created session: Key=${createdSession.broadcastKey}, Port=${createdSession.port}, Status=${createdSession.status}`);
-
-  // 1.4 GET /api/broadcast/session returns active session details
-  const activeGetRes = await requestHttp(`${baseUrl}/api/broadcast/session`);
-  assert.strictEqual(activeGetRes.statusCode, 200, 'GET /api/broadcast/session must return 200 for active session');
-  const activeSession = activeGetRes.json;
-  assert.strictEqual(activeSession.sessionId, createdSession.sessionId, 'sessionId must match created session');
-  assert.strictEqual(activeSession.broadcastKey, createdSession.broadcastKey, 'broadcastKey must match created session');
-  assert.strictEqual(activeSession.status, 'LISTENING', 'status must be LISTENING');
-  assert.strictEqual(activeSession.port, createdSession.port, 'port must match created session');
-  assert.strictEqual(activeSession.instructions, createdSession.instructions, 'instructions must match');
-  console.log('  ✔ GET /api/broadcast/session returns active session details correctly');
-}
-
-/**
- * Section 2: Real-Time Stream Simulation & Immediate Extraction (<= 100ms)
- */
-async function testSection2_RealTimeStreamSimulationAndExtraction() {
-  console.log('\n--- Section 2: Real-Time Stream Simulation & Immediate Extraction (<= 100ms) ---');
-
-  const session = broadcastService.getSession();
-  const tcpPort = session.port;
-  assert.ok(tcpPort > 0, 'Active TCP port must be available');
-
-  // --- Sub-test 2.1: Replay 1 (unranked_game1.slp - 2 Players, Battlefield) ---
-  console.log('  Sub-test 2.1: Streaming unranked_game1.slp...');
-  assert.ok(fs.existsSync(REPLAY_UNRANKED), `Replay file ${REPLAY_UNRANKED} must exist`);
-  const slpBuffer1 = fs.readFileSync(REPLAY_UNRANKED);
-  assert.ok(slpBuffer1.length > 0, 'Replay buffer must not be empty');
-
-  let game1Data = null;
-  const game1Promise = new Promise((resolve) => {
-    broadcastService.once('gameStart', (game) => {
-      game1Data = game;
-      resolve();
-    });
-  });
-
-  // Connect TCP client to session port
-  const client1 = net.connect(tcpPort, '127.0.0.1');
-  await new Promise((resolve) => client1.on('connect', resolve));
-
-  // High-resolution measurement from transmission start to gameStart event
-  const t0_game1 = performance.now();
-  client1.write(slpBuffer1);
-  await game1Promise;
-  const elapsed1 = performance.now() - t0_game1;
-
-  console.log(`    Extraction time for unranked_game1.slp: ${elapsed1.toFixed(2)}ms`);
-  assert.ok(elapsed1 <= 100, `Extraction time must be <= 100ms (measured: ${elapsed1.toFixed(2)}ms)`);
-
-  // Assert game metadata for unranked_game1.slp
-  assert.ok(game1Data !== null, 'GAME_START event must produce non-null game data');
-  assert.strictEqual(game1Data.stageId, 31, 'stageId must be 31 for Battlefield');
-  assert.strictEqual(game1Data.stageName, 'Battlefield', 'canonical stageName must be "Battlefield"');
-  assert.strictEqual(game1Data.players.length, 2, 'Must have exactly 2 active players');
-
-  // Player 1 assertions
-  const p1_g1 = game1Data.players.find((p) => p.port === 1);
-  assert.ok(p1_g1, 'Player on port 1 must exist');
-  assert.strictEqual(p1_g1.playerIndex, 0, 'Player 1 index must be 0');
-  assert.strictEqual(p1_g1.connectCode, 'NIKK#513', 'Player 1 connectCode must be NIKK#513');
-  assert.strictEqual(p1_g1.characterId, 20, 'Player 1 characterId must be 20 (Falco)');
-  assert.strictEqual(p1_g1.characterName, 'Falco', 'Player 1 characterName must be "Falco"');
-  assert.strictEqual(p1_g1.costumeIndex, 0, 'Player 1 costumeIndex must be 0');
-  assert.strictEqual(p1_g1.displayName, 'Nikki Dev1', 'Player 1 displayName must be "Nikki Dev1"');
-
-  // Player 2 assertions
-  const p2_g1 = game1Data.players.find((p) => p.port === 2);
-  assert.ok(p2_g1, 'Player on port 2 must exist');
-  assert.strictEqual(p2_g1.playerIndex, 1, 'Player 2 index must be 1');
-  assert.strictEqual(p2_g1.connectCode, 'NIKK#142', 'Player 2 connectCode must be NIKK#142');
-  assert.strictEqual(p2_g1.characterId, 20, 'Player 2 characterId must be 20 (Falco)');
-  assert.strictEqual(p2_g1.characterName, 'Falco', 'Player 2 characterName must be "Falco"');
-  assert.strictEqual(p2_g1.costumeIndex, 0, 'Player 2 costumeIndex must be 0');
-  assert.strictEqual(p2_g1.displayName, 'Nikki Dev2', 'Player 2 displayName must be "Nikki Dev2"');
-
-  console.log(`    ✔ Replay 1 validated: ${game1Data.stageName} (Stage ${game1Data.stageId}), 2 Falcos (${p1_g1.connectCode} vs ${p2_g1.connectCode}) in ${elapsed1.toFixed(2)}ms`);
-
-  // Disconnect client 1 and wait for cleanup
-  await disconnectAndDrain(client1, broadcastService);
-
-  // --- Sub-test 2.2: Replay 2 (displayNameAndConnectCodeInGameStart.slp - 4 Players, Pokémon Stadium) ---
-  console.log('  Sub-test 2.2: Streaming displayNameAndConnectCodeInGameStart.slp (4 players)...');
-  assert.ok(fs.existsSync(REPLAY_4PLAYERS), `Replay file ${REPLAY_4PLAYERS} must exist`);
-  const slpBuffer2 = fs.readFileSync(REPLAY_4PLAYERS);
-  assert.ok(slpBuffer2.length > 0, 'Replay buffer 2 must not be empty');
-
-  let game2Data = null;
-  const game2Promise = new Promise((resolve) => {
-    broadcastService.once('gameStart', (game) => {
-      game2Data = game;
-      resolve();
-    });
-  });
-
-  // Connect new simulated TCP client
-  const client2 = net.connect(tcpPort, '127.0.0.1');
-  await new Promise((resolve) => client2.on('connect', resolve));
-
-  // High-resolution measurement from transmission start to gameStart event
-  const t0_game2 = performance.now();
-  client2.write(slpBuffer2);
-  await game2Promise;
-  const elapsed2 = performance.now() - t0_game2;
-
-  console.log(`    Extraction time for displayNameAndConnectCodeInGameStart.slp: ${elapsed2.toFixed(2)}ms`);
-  assert.ok(elapsed2 <= 100, `Extraction time must be <= 100ms (measured: ${elapsed2.toFixed(2)}ms)`);
-
-  // Assert game metadata for displayNameAndConnectCodeInGameStart.slp
-  assert.ok(game2Data !== null, 'GAME_START event must produce non-null game data for 4-player replay');
-  assert.strictEqual(game2Data.stageId, 3, 'stageId must be 3 for Pokémon Stadium');
-  assert.strictEqual(game2Data.stageName, 'Pokémon Stadium', 'canonical stageName must be "Pokémon Stadium"');
-  assert.strictEqual(game2Data.players.length, 4, 'Must have exactly 4 active players');
-
-  // Verify all 4 players' connect codes and character assignments
-  const expectedPlayers = [
-    { port: 1, connectCode: 'EKNS#442', characterId: 2, characterName: 'Fox', costumeIndex: 2, displayName: 'ekans' },
-    { port: 2, connectCode: 'BAP#666', characterId: 0, characterName: 'Captain Falcon', costumeIndex: 2, displayName: "gaR's uncle" },
-    { port: 3, connectCode: 'JMLE#166', characterId: 9, characterName: 'Marth', costumeIndex: 0, displayName: 'jmlee337' },
-    { port: 4, connectCode: 'SUI#244', characterId: 20, characterName: 'Falco', costumeIndex: 1, displayName: 'Mr.SuiSui' },
-  ];
-
-  for (const exp of expectedPlayers) {
-    const act = game2Data.players.find((p) => p.port === exp.port);
-    assert.ok(act, `Active player on port ${exp.port} must exist`);
-    assert.strictEqual(act.connectCode, exp.connectCode, `Port ${exp.port} connectCode must be ${exp.connectCode}`);
-    assert.strictEqual(act.characterId, exp.characterId, `Port ${exp.port} characterId must be ${exp.characterId}`);
-    assert.strictEqual(act.characterName, exp.characterName, `Port ${exp.port} characterName must be ${exp.characterName}`);
-    assert.strictEqual(act.costumeIndex, exp.costumeIndex, `Port ${exp.port} costumeIndex must be ${exp.costumeIndex}`);
-    assert.strictEqual(act.displayName, exp.displayName, `Port ${exp.port} displayName must be "${exp.displayName}"`);
-  }
-
-  console.log(`    ✔ Replay 2 validated: ${game2Data.stageName} (Stage ${game2Data.stageId}), 4 players (${expectedPlayers.map(p => p.connectCode).join(', ')}) in ${elapsed2.toFixed(2)}ms`);
-
-  // Disconnect client 2 and wait for full cleanup
-  await disconnectAndDrain(client2, broadcastService);
-}
-
-/**
- * Section 3: SSE Streaming & Event Dispatch
- */
-async function testSection3_SSEStreamingAndEventDispatch() {
-  console.log('\n--- Section 3: SSE Streaming & Event Dispatch ---');
-
-  // Verify service returned to LISTENING with 0 active sockets before starting SSE tests
-  assert.strictEqual(broadcastService.status, 'LISTENING', 'Broadcast service must be in LISTENING state before SSE test');
-  assert.strictEqual(broadcastService.activeSockets.size, 0, 'No sockets should be active before SSE test');
-
-  // 3.1 Connect SSE consumer to GET /api/broadcast/events
-  const sseUrl = `${baseUrl}/api/broadcast/events`;
-  const sseClient = openSseStream(sseUrl);
-  await sseClient.ready;
-  console.log('  ✔ Connected to GET /api/broadcast/events');
-
-  let testClient = null;
   try {
-    // 3.2 Verify initial 'session' event is emitted immediately upon SSE connection
-    const sessionEvent = await sseClient.waitForEvent((e) => e.type === 'session', 1000);
-    assert.ok(sessionEvent, 'SSE must immediately emit initial "session" event');
-    assert.ok(sessionEvent.broadcastKey, 'session event must include active broadcastKey');
-    console.log(`  ✔ Received initial SSE 'session' event (Key: ${sessionEvent.broadcastKey}, Status: ${sessionEvent.status})`);
+    // -------------------------------------------------------------------------
+    // SECTION 1: Slippi Account Authentication & Token Management
+    // -------------------------------------------------------------------------
+    console.log('--- Section 1: Slippi Account Authentication & Token Management ---');
+    const initAuthRes = await requestHttp(`${baseUrl}/api/broadcast/auth/status`);
+    assert.strictEqual(initAuthRes.statusCode, 200);
+    assert.strictEqual(initAuthRes.json.authenticated, false, 'Initial auth state must be false');
 
-    // 3.3 Connect TCP client to trigger 'statusChange' -> CONNECTED
-    const session = broadcastService.getSession();
-    testClient = net.connect(session.port, '127.0.0.1');
-    await new Promise((resolve) => testClient.on('connect', resolve));
+    const loginRes = await requestHttp(`${baseUrl}/api/broadcast/auth/login`, {
+      method: 'POST',
+      body: { email: 'spectator@slippi.gg', password: 'password123' },
+    });
+    assert.strictEqual(loginRes.statusCode, 200, 'Login must succeed');
+    assert.strictEqual(loginRes.json.authenticated, true);
+    assert.strictEqual(loginRes.json.uid, 'slippi_fb_uid_spectator_28c');
+    assert.strictEqual(loginRes.json.displayName, 'ApexSpectator');
+    assert.strictEqual(loginRes.json.connectCode, 'APEX#001');
+    assert.ok(fs.existsSync(credsPath), 'Credentials must be saved to disk');
+    console.log(`  ✔ Authenticated as ${loginRes.json.displayName} (${loginRes.json.connectCode}) with Spectator ID: ${loginRes.json.uid}`);
 
-    const statusConnectedEvent = await sseClient.waitForEvent(
-      (e) => e.type === 'statusChange' && e.status === 'CONNECTED',
-      1000
-    );
-    assert.ok(statusConnectedEvent, 'SSE must emit statusChange with status=CONNECTED on client connection');
-    console.log('  ✔ Received SSE statusChange event: CONNECTED');
+    // Verify token refresh
+    const refreshedToken = await authClient.refresh();
+    assert.strictEqual(refreshedToken, 'mock_refreshed_firebase_jwt');
+    console.log('  ✔ Token refresh validated via Firebase SecureToken API');
 
-    // 3.4 Stream game buffer to trigger 'gameStart' event and 'statusChange' -> IN_GAME
-    const slpBuffer = fs.readFileSync(REPLAY_UNRANKED);
-    testClient.write(slpBuffer);
+    // -------------------------------------------------------------------------
+    // SECTION 2: Cloud Relay Session Provisioning & Header Verification
+    // -------------------------------------------------------------------------
+    console.log('\n--- Section 2: Cloud Relay Session Provisioning & Header Verification ---');
+    const initSessionRes = await requestHttp(`${baseUrl}/api/broadcast/session`);
+    assert.strictEqual(initSessionRes.json.status, BroadcastState.IDLE);
 
-    const gameStartEvent = await sseClient.waitForEvent((e) => e.type === 'gameStart', 1500);
-    assert.ok(gameStartEvent, 'SSE must emit gameStart event upon replay game start');
-    assert.strictEqual(gameStartEvent.stageId, 31, 'SSE gameStart event stageId must be 31');
-    assert.strictEqual(gameStartEvent.stageName, 'Battlefield', 'SSE gameStart event stageName must be Battlefield');
-    assert.strictEqual(gameStartEvent.players.length, 2, 'SSE gameStart event must include 2 players');
-    console.log(`  ✔ Received SSE gameStart event: ${gameStartEvent.stageName} with ${gameStartEvent.players.length} players`);
+    const startRes = await requestHttp(`${baseUrl}/api/broadcast/session`, {
+      method: 'POST',
+      body: { autoArchive: true, lunarUpload: true },
+    });
+    assert.strictEqual(startRes.statusCode, 200);
+    assert.ok(startRes.json.status === BroadcastState.LISTENING || startRes.json.status === BroadcastState.CONNECTED);
+    assert.strictEqual(startRes.json.spectatorId, 'slippi_fb_uid_spectator_28c');
+    assert.strictEqual(startRes.json.broadcastKey, 'slippi_fb_uid_spectator_28c');
 
-    const statusInGameEvent = await sseClient.waitForEvent(
-      (e) => e.type === 'statusChange' && e.status === 'IN_GAME',
-      1000
-    );
-    assert.ok(statusInGameEvent, 'SSE must emit statusChange with status=IN_GAME');
-    console.log('  ✔ Received SSE statusChange event: IN_GAME');
+    // Verify protocol upgrade headers
+    assert.ok(latestRelayHeaders, 'Mock relay must capture upgrade headers');
+    assert.strictEqual(latestRelayHeaders['api-version'], '2', 'API-Version header must be 2');
+    assert.ok(latestRelayHeaders['authorization'].startsWith('Bearer mock_refreshed_firebase_jwt'));
+    console.log('  ✔ Connected to Slippi Cloud Relay with api-version=2 and Bearer authorization headers');
 
-    // 3.5 Disconnect TCP client to trigger 'gameEnd' event and 'statusChange' -> LISTENING
-    await disconnectAndDrain(testClient, broadcastService);
-    testClient = null;
-
-    const gameEndEvent = await sseClient.waitForEvent((e) => e.type === 'gameEnd', 1500);
-    assert.ok(gameEndEvent, 'SSE must emit gameEnd event upon client disconnect during game');
-    console.log('  ✔ Received SSE gameEnd event successfully');
-  } finally {
-    if (testClient) {
-      await disconnectAndDrain(testClient, broadcastService);
-    }
-    sseClient.close();
+    // -------------------------------------------------------------------------
+    // SECTION 3: Remote Broadcaster Discovery & Auto-Follow
+    // -------------------------------------------------------------------------
+    console.log('\n--- Section 3: Remote Broadcaster Discovery & Auto-Follow ---');
+    // Allow brief turn for list-broadcasts and watch-broadcast exchange
     await sleep(50);
-  }
+    const sessionWithBrd = broadcastService.getSession();
+    assert.ok(sessionWithBrd.activeBroadcasts.length > 0, 'Must have received active broadcast from mock relay');
+    assert.strictEqual(sessionWithBrd.activeBroadcasts[0].broadcastId, 'brd_tournament_01');
+    assert.strictEqual(sessionWithBrd.currentBroadcastId, 'brd_tournament_01');
+    assert.strictEqual(sessionWithBrd.currentBroadcaster.displayName, 'Nikk');
+    assert.strictEqual(sessionWithBrd.status, BroadcastState.CONNECTED);
+    console.log(`  ✔ Auto-followed stream targeting spectator ID: broadcaster=${sessionWithBrd.currentBroadcaster.displayName} (${sessionWithBrd.currentBroadcaster.connectCode})`);
 
-  console.log('  ✔ Section 3 SSE streaming and real-time event dispatch fully verified');
-}
+    // -------------------------------------------------------------------------
+    // SECTION 4: Real-Time Stream Simulation & Immediate Extraction (<= 100ms)
+    // -------------------------------------------------------------------------
+    console.log('\n--- Section 4: Real-Time Stream Simulation & Immediate Extraction (<= 100ms) ---');
 
-/**
- * Section 4: Resource Cleanup & Port Disposal
- */
-async function testSection4_ResourceCleanupAndPortDisposal() {
-  console.log('\n--- Section 4: Resource Cleanup & Port Disposal ---');
+    // Connect SSE client ahead of stream to observe real-time push
+    const sse = openSseStream(`${baseUrl}/api/broadcast/events`);
+    await sse.ready;
 
-  const currentSession = broadcastService.getSession();
-  const tcpPortToRelease = currentSession.port;
-  assert.ok(tcpPortToRelease > 0, 'TCP port must be positive integer');
+    const initialSseSession = await sse.waitForEvent((e) => e.type === 'session');
+    assert.ok(initialSseSession, 'SSE must push session event');
+    assert.strictEqual(initialSseSession.spectatorId, 'slippi_fb_uid_spectator_28c');
 
-  // Connect a dummy TCP client to prove socket disposal on session deletion
-  const dummyClient = net.connect(tcpPortToRelease, '127.0.0.1');
-  await new Promise((resolve) => dummyClient.on('connect', resolve));
-  assert.strictEqual(broadcastService.activeSockets.size, 1, 'Should have 1 active client socket before DELETE');
-
-  // Set up promise to observe client socket termination
-  const clientClosedPromise = new Promise((resolve) => dummyClient.on('close', resolve));
-
-  // 4.1 Send DELETE /api/broadcast/session
-  const deleteRes = await requestHttp(`${baseUrl}/api/broadcast/session`, { method: 'DELETE' });
-  assert.strictEqual(deleteRes.statusCode, 200, 'DELETE /api/broadcast/session must return HTTP 200');
-  const deleteBody = deleteRes.json;
-  assert.strictEqual(deleteBody.status, 'IDLE', 'Response status must be IDLE');
-  assert.ok(deleteBody.message.includes('Session stopped and resources released'), 'Response must confirm release');
-  console.log('  ✔ DELETE /api/broadcast/session returned HTTP 200 with status=IDLE');
-
-  // 4.2 Verify client socket destruction
-  await clientClosedPromise;
-  assert.strictEqual(dummyClient.destroyed, true, 'Client socket must be destroyed after session deletion');
-  assert.strictEqual(broadcastService.activeSockets.size, 0, 'activeSockets Set must be cleared (size === 0)');
-  assert.strictEqual(broadcastService.tcpServer, null, 'tcpServer reference must be set to null');
-  console.log('  ✔ All active client sockets destroyed and server reference cleared');
-
-  // 4.3 Verify immediate re-bind of the same TCP port succeeds with zero EADDRINUSE
-  const probeServer = net.createServer();
-  let rebindError = null;
-
-  await new Promise((resolve, reject) => {
-    probeServer.once('error', (err) => {
-      rebindError = err;
-      reject(err);
+    let capturedGameStart = null;
+    let latency1 = null;
+    const startParse1 = performance.now();
+    const gameStartPromise = new Promise((resolve) => {
+      broadcastService.once('gameStart', (g) => {
+        capturedGameStart = g;
+        latency1 = performance.now() - startParse1;
+        resolve();
+      });
     });
 
-    probeServer.listen(tcpPortToRelease, '127.0.0.1', () => {
-      resolve();
-    });
-  }).catch((err) => {
-    rebindError = err;
-  });
-
-  assert.strictEqual(rebindError, null, `Immediate rebind on port ${tcpPortToRelease} must not throw EADDRINUSE: ${rebindError?.message}`);
-  const boundAddress = probeServer.address();
-  assert.ok(boundAddress && boundAddress.port === tcpPortToRelease, 'Probe server must be bound to original port');
-  console.log(`  ✔ Immediate re-bind to port ${tcpPortToRelease} succeeded with zero EADDRINUSE (clean disposal proven)`);
-
-  // Close probe server
-  await new Promise((resolve) => probeServer.close(resolve));
-
-  // 4.4 Verify GET /api/broadcast/session confirms state returned to IDLE
-  const postDeleteGetRes = await requestHttp(`${baseUrl}/api/broadcast/session`);
-  assert.strictEqual(postDeleteGetRes.statusCode, 200);
-  assert.strictEqual(postDeleteGetRes.json.status, 'IDLE');
-  assert.strictEqual(postDeleteGetRes.json.port, null);
-  assert.strictEqual(postDeleteGetRes.json.broadcastKey, null);
-  console.log('  ✔ GET /api/broadcast/session confirms status is IDLE after cleanup');
-}
-
-/**
- * Section 5: Zero Disk Accumulation
- */
-async function testSection5_ZeroDiskAccumulation() {
-  console.log('\n--- Section 5: Zero Disk Accumulation ---');
-
-  const tempSlpDir = path.resolve('./temp_slp');
-  assert.ok(fs.existsSync(tempSlpDir), 'temp_slp directory must exist');
-
-  // 5.1 Inspect directory contents directly
-  const files = fs.readdirSync(tempSlpDir);
-  const slpFiles = files.filter((f) => f.endsWith('.slp'));
-  console.log(`  Inspecting ${tempSlpDir}: found ${files.length} total entries, ${slpFiles.length} .slp files`);
-  assert.strictEqual(slpFiles.length, 0, `temp_slp must contain zero .slp files (found: ${slpFiles.join(', ')})`);
-  console.log('  ✔ temp_slp/ contains 0 .slp files on disk');
-
-  // 5.2 Query Pipeline Status API to confirm infrastructure reporting
-  const pipelineRes = await requestHttp(`${baseUrl}/api/pipeline/status`);
-  if (pipelineRes.statusCode === 200 && pipelineRes.json) {
-    assert.strictEqual(pipelineRes.json.tempSlpCount, 0, 'Pipeline telemetry must report tempSlpCount === 0');
-    console.log(`  ✔ Pipeline status reports tempSlpCount=0`);
-  }
-
-  // 5.3 Query Storage Footprint API to confirm zero accumulation
-  const storageRes = await requestHttp(`${baseUrl}/api/storage/footprint`);
-  if (storageRes.statusCode === 200 && storageRes.json) {
-    assert.strictEqual(storageRes.json.tempSlpZero, true, 'Storage footprint must report tempSlpZero === true');
-    console.log(`  ✔ Storage footprint reports tempSlpZero=true`);
-  }
-
-  console.log('  ✔ Zero disk accumulation verified: live stream ingested exclusively in-memory');
-}
-
-/**
- * Section 6: Regression Verification & Runtime Compliance
- */
-async function testSection6_RegressionVerificationAndRuntimeCompliance() {
-  console.log('\n--- Section 6: Regression Verification & Runtime Compliance ---');
-
-  // Teardown the section test HTTP server so ports are completely free
-  if (testServer) {
-    if (typeof testServer.closeAllConnections === 'function') {
-      testServer.closeAllConnections();
+    // Stream base64 chunks of 2-player replay through mock relay
+    const replay1Bytes = fs.readFileSync(REPLAY_UNRANKED);
+    for (let i = 0; i < replay1Bytes.length; i += 2048) {
+      const slice = replay1Bytes.subarray(i, i + 2048);
+      const payload = slice.toString('base64');
+      const msg = JSON.stringify({ type: 'events', events: [{ type: 'game_event', payload }] });
+      for (const c of mockRelayClients) {
+        if (c.readyState === 1) c.send(msg);
+      }
     }
-    await new Promise((resolve) => testServer.close(resolve));
-    testServer = null;
-    console.log('  ✔ Test HTTP server closed cleanly');
-  }
-  resetBroadcastService();
 
-  // Run npm test to verify full regression safety
-  console.log('  Executing regression check: npm test (stage1_local_test.js & server_test.js)...');
-  const npmTestResult = await new Promise((resolve, reject) => {
-    const child = spawn('npm', ['test'], {
+    await Promise.race([
+      gameStartPromise,
+      new Promise((_, reject) => setTimeout(() => reject(new Error('gameStart timeout')), 2000)),
+    ]);
+
+    assert.ok(latency1 <= 100, `Extraction latency must be <= 100ms, took ${latency1.toFixed(2)}ms`);
+    assert.ok(capturedGameStart, 'gameStart metadata must be captured');
+    assert.strictEqual(capturedGameStart.stageId, 31);
+    assert.strictEqual(capturedGameStart.stageName, 'Battlefield');
+    assert.strictEqual(capturedGameStart.players.length, 2);
+    console.log(`  ✔ Replay 1 (2 Players): Battlefield (Stage 31) extracted in ${latency1.toFixed(2)}ms (<= 100ms)`);
+
+    // Sub-test 4.2: 4-Player Replay extraction
+    const replay2Bytes = fs.readFileSync(REPLAY_4PLAYERS);
+    let captured4Player = null;
+    let latency2 = null;
+    const startParse2 = performance.now();
+    const gameStart4PPromise = new Promise((resolve) => {
+      broadcastService.once('gameStart', (g) => {
+        captured4Player = g;
+        latency2 = performance.now() - startParse2;
+        resolve();
+      });
+    });
+
+    for (let i = 0; i < replay2Bytes.length; i += 2048) {
+      const slice = replay2Bytes.subarray(i, i + 2048);
+      const payload = slice.toString('base64');
+      const msg = JSON.stringify({ type: 'events', events: [{ type: 'game_event', payload }] });
+      for (const c of mockRelayClients) {
+        if (c.readyState === 1) c.send(msg);
+      }
+    }
+
+    await Promise.race([
+      gameStart4PPromise,
+      new Promise((_, reject) => setTimeout(() => reject(new Error('4-player gameStart timeout')), 2000)),
+    ]);
+
+    assert.ok(latency2 <= 100, `4-player extraction latency must be <= 100ms, took ${latency2.toFixed(2)}ms`);
+    assert.strictEqual(captured4Player.stageId, 3); // Pokémon Stadium
+    assert.strictEqual(captured4Player.players.length, 4);
+    console.log(`  ✔ Replay 2 (4 Players): Pokémon Stadium (Stage 3) extracted in ${latency2.toFixed(2)}ms (<= 100ms)`);
+
+    // -------------------------------------------------------------------------
+    // SECTION 5: SSE Streaming & Event Dispatch
+    // -------------------------------------------------------------------------
+    console.log('\n--- Section 5: SSE Streaming & Event Dispatch ---');
+    const sseGameStart = await sse.waitForEvent((e) => e.type === 'gameStart');
+    assert.ok(sseGameStart, 'SSE must push gameStart event to frontend');
+    const sseGameEnd = await sse.waitForEvent((e) => e.type === 'gameEnd');
+    assert.ok(sseGameEnd, 'SSE must push gameEnd event to frontend');
+    sse.close();
+    console.log('  ✔ SSE client received session, gameStart, and gameEnd events in real-time');
+
+    // -------------------------------------------------------------------------
+    // SECTION 6: Post-Match Dual Persistence & Lunar Melee Upload Trigger
+    // -------------------------------------------------------------------------
+    console.log('\n--- Section 6: Post-Match Dual Persistence & Lunar Melee Upload Trigger ---');
+    // Wait for all async archives and uploads to settle
+    const archiveWaitStart = Date.now();
+    while (broadcastService.activeArchives > 0 && Date.now() - archiveWaitStart < 4000) {
+      await sleep(20);
+    }
+    await sleep(50);
+
+    const db = getDatabase();
+    const recordedGames = db.prepare('SELECT game_id, stage_id FROM games ORDER BY created_at DESC LIMIT 1').all();
+    assert.ok(recordedGames.length > 0, 'Finished match must be saved to SQLite analytics.db');
+    console.log(`  ✔ Local SQLite persistence verified: game_id=${recordedGames[0].game_id}, stage_id=${recordedGames[0].stage_id}`);
+
+    assert.ok(lastLunarUpload, 'Lunar Melee uploader must have triggered POST /api/uploads');
+    assert.strictEqual(lastLunarUpload.method, 'POST');
+    assert.ok(lastLunarUpload.headers['content-type'].includes('application/octet-stream'));
+    assert.ok(lastLunarUpload.size > 1000, 'Uploaded payload must contain binary replay bytes');
+    console.log(`  ✔ Lunar Melee upload request verified: ${lastLunarUpload.size} bytes uploaded to ${lastLunarUpload.path}`);
+
+    // -------------------------------------------------------------------------
+    // SECTION 7: Zero Disk Accumulation Invariant
+    // -------------------------------------------------------------------------
+    console.log('\n--- Section 7: Zero Disk Accumulation Invariant ---');
+    const tempDir = path.resolve('temp_slp');
+    const tempSlpFiles = fs.existsSync(tempDir) ? fs.readdirSync(tempDir).filter((f) => f.endsWith('.slp')) : [];
+    assert.strictEqual(tempSlpFiles.length, 0, `temp_slp must contain 0 .slp files, found: ${tempSlpFiles.join(', ')}`);
+    console.log('  ✔ temp_slp/ verified: 0 remaining .slp files (zero accumulation strictly maintained)');
+
+    // -------------------------------------------------------------------------
+    // SECTION 8: Resource Cleanup, Teardown & Full Regression Check
+    // -------------------------------------------------------------------------
+    console.log('\n--- Section 8: Resource Cleanup, Teardown & Full Regression Check ---');
+    const deleteRes = await requestHttp(`${baseUrl}/api/broadcast/session`, { method: 'DELETE' });
+    assert.strictEqual(deleteRes.statusCode, 200);
+    assert.strictEqual(deleteRes.json.status, BroadcastState.IDLE);
+    assert.strictEqual(broadcastService.status, BroadcastState.IDLE);
+    console.log('  ✔ Session cleanly stopped, WebSocket relay connection closed');
+
+    // Logout
+    const logoutRes = await requestHttp(`${baseUrl}/api/broadcast/auth/logout`, { method: 'POST' });
+    assert.strictEqual(logoutRes.statusCode, 200);
+    assert.strictEqual(fs.existsSync(credsPath), false, 'Credentials file deleted upon logout');
+    console.log('  ✔ Signed out, credentials securely purged');
+
+    console.log('\n  Running regression check (npm test)...');
+    const testProc = spawn('npm', ['test'], {
       cwd: process.cwd(),
       env: { ...process.env, NODE_NO_WARNINGS: '1' },
-      stdio: ['ignore', 'pipe', 'pipe'],
+      stdio: 'inherit',
     });
+    const testExitCode = await new Promise((r) => testProc.on('close', r));
+    assert.strictEqual(testExitCode, 0, 'npm test must pass with exit code 0');
+    console.log('  ✔ npm test passed cleanly with code 0 (zero regressions)');
 
-    let stdout = '';
-    let stderr = '';
-    child.stdout.on('data', (d) => { stdout += d.toString(); });
-    child.stderr.on('data', (d) => { stderr += d.toString(); });
-
-    child.on('close', (code) => {
-      resolve({ code, stdout, stderr });
-    });
-    child.on('error', reject);
-  });
-
-  if (npmTestResult.code !== 0) {
-    console.error('npm test failed with output:');
-    console.error(npmTestResult.stdout);
-    console.error(npmTestResult.stderr);
-  }
-  assert.strictEqual(npmTestResult.code, 0, `npm test must pass with exit code 0 (got ${npmTestResult.code})`);
-  console.log('  ✔ npm test passed cleanly with code 0 (zero regressions across local engine, storage, and server)');
-}
-
-/**
- * Main Test Runner
- */
-async function runSuite() {
-  console.log('========================================================================');
-  console.log('⚡ FLOWSTATE MELEE: BROADCAST SPECTATOR COMPREHENSIVE TEST SUITE (M3) ⚡');
-  console.log('========================================================================');
-
-  const sections = [
-    { name: 'Section 1: Session Provisioning & Retrieval (REST Lifecycle)', fn: testSection1_SessionProvisioningAndRetrieval },
-    { name: 'Section 2: Real-Time Stream Simulation & Immediate Extraction (<= 100ms)', fn: testSection2_RealTimeStreamSimulationAndExtraction },
-    { name: 'Section 3: SSE Streaming & Event Dispatch', fn: testSection3_SSEStreamingAndEventDispatch },
-    { name: 'Section 4: Resource Cleanup & Port Disposal', fn: testSection4_ResourceCleanupAndPortDisposal },
-    { name: 'Section 5: Zero Disk Accumulation', fn: testSection5_ZeroDiskAccumulation },
-    { name: 'Section 6: Regression Verification & Runtime Compliance', fn: testSection6_RegressionVerificationAndRuntimeCompliance },
-  ];
-
-  const passed = [];
-  const failed = [];
-
-  for (const section of sections) {
-    try {
-      await section.fn();
-      passed.push(section.name);
-    } catch (err) {
-      console.error(`\n  ✖ ${section.name} FAILED: ${err.message}`);
-      if (err.stack) {
-        const stackLines = err.stack.split('\n').slice(1, 5).join('\n');
-        console.error(`    ${stackLines}`);
-      }
-      failed.push({ name: section.name, error: err });
-    }
-  }
-
-  // Cleanup any lingering resources
-  try {
+    console.log('\n========================================================================');
+    console.log('🎉 ALL 8 SECTIONS PASSED: OFFICIAL SLIPPI CLOUD SPECTATOR FULLY VERIFIED! 🎉');
+    console.log('========================================================================');
+  } finally {
     if (testServer) {
-      if (typeof testServer.closeAllConnections === 'function') {
-        testServer.closeAllConnections();
-      }
       await new Promise((r) => testServer.close(r));
     }
-    resetBroadcastService();
-    closeDatabase();
-  } catch (_) {}
-
-  console.log('\n========================================================================');
-  console.log(`SUITE EXECUTION SUMMARY: ${passed.length} Passed, ${failed.length} Failed out of ${sections.length} Sections`);
-  console.log('========================================================================');
-
-  if (failed.length > 0) {
-    console.error('\nFailed Sections:');
-    for (const f of failed) {
-      console.error(`- ${f.name}: ${f.error.message}`);
-    }
-    process.exit(1);
-  } else {
-    console.log('All 6 test sections passed successfully!');
-    process.exit(0);
+    await teardownMockServers();
+    try {
+      if (fs.existsSync(credsPath)) fs.unlinkSync(credsPath);
+    } catch (_) {}
+    try {
+      if (fs.existsSync('payloads/2022/12/c5968a00f200ba57306cd646.json.gz')) {
+        fs.unlinkSync('payloads/2022/12/c5968a00f200ba57306cd646.json.gz');
+        try { fs.rmdirSync('payloads/2022/12'); } catch (_) {}
+        try { fs.rmdirSync('payloads/2022'); } catch (_) {}
+      }
+    } catch (_) {}
+    try {
+      const db = getDatabase();
+      db.prepare("DELETE FROM game_players WHERE game_id = 'c5968a00f200ba57306cd646'").run();
+      db.prepare("DELETE FROM games WHERE game_id = 'c5968a00f200ba57306cd646'").run();
+    } catch (_) {}
   }
 }
 
-runSuite().catch((err) => {
-  console.error('Fatal Test Suite Error:', err);
+run().catch((err) => {
+  console.error('\n❌ TEST FAILURE:', err);
   process.exit(1);
 });

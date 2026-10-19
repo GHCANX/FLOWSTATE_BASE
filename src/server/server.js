@@ -88,6 +88,38 @@ export function createServer(options = {}) {
 
     // 1. API Routes
 
+    // Broadcast Slippi Auth Routes
+    if (pathname === '/api/broadcast/auth/login' && req.method === 'POST') {
+      try {
+        const body = await parseJsonBody(req);
+        const result = await broadcast.auth.login(body.email, body.password);
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(result));
+      } catch (err) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: err.message }));
+      }
+      return;
+    }
+
+    if (pathname === '/api/broadcast/auth/logout' && req.method === 'POST') {
+      try {
+        const result = broadcast.auth.logout();
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(result));
+      } catch (err) {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: err.message }));
+      }
+      return;
+    }
+
+    if (pathname === '/api/broadcast/auth/status' && req.method === 'GET') {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(broadcast.auth.getCredentialsSummary()));
+      return;
+    }
+
     // Broadcast Spectator Session Routes
     if (pathname === '/api/broadcast/session' && req.method === 'POST') {
       try {
@@ -120,6 +152,19 @@ export function createServer(options = {}) {
       return;
     }
 
+    if (pathname === '/api/broadcast/watch' && req.method === 'POST') {
+      try {
+        const body = await parseJsonBody(req);
+        broadcast.watchBroadcast(body.broadcastId);
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: true, watching: body.broadcastId }));
+      } catch (err) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: err.message }));
+      }
+      return;
+    }
+
     if (pathname === '/api/broadcast/events' && req.method === 'GET') {
       res.writeHead(200, {
         'Content-Type': 'text/event-stream',
@@ -141,17 +186,26 @@ export function createServer(options = {}) {
       sendEvent('session', broadcast.getSession());
 
       const onStatusChange = (state) => sendEvent('statusChange', state);
+      const onBroadcastsUpdated = (broadcasts) => sendEvent('broadcastsUpdated', broadcasts);
       const onGameStart = (game) => sendEvent('gameStart', game);
       const onGameEnd = (end) => sendEvent('gameEnd', end);
+      const onArchiveComplete = (data) => sendEvent('archiveComplete', data);
+      const onArchiveError = (data) => sendEvent('archiveError', data);
 
       broadcast.on('statusChange', onStatusChange);
+      broadcast.on('broadcastsUpdated', onBroadcastsUpdated);
       broadcast.on('gameStart', onGameStart);
       broadcast.on('gameEnd', onGameEnd);
+      broadcast.on('archiveComplete', onArchiveComplete);
+      broadcast.on('archiveError', onArchiveError);
 
       req.on('close', () => {
         broadcast.off('statusChange', onStatusChange);
+        broadcast.off('broadcastsUpdated', onBroadcastsUpdated);
         broadcast.off('gameStart', onGameStart);
         broadcast.off('gameEnd', onGameEnd);
+        broadcast.off('archiveComplete', onArchiveComplete);
+        broadcast.off('archiveError', onArchiveError);
       });
       return;
     }
