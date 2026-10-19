@@ -14,14 +14,22 @@ function runCli(args = []) {
 
     let stdout = '';
     let stderr = '';
+    const timer = setTimeout(() => {
+      proc.kill('SIGKILL');
+      reject(new Error(`Timed out running CLI command: ${args.join(' ')}`));
+    }, 10000);
 
     proc.stdout.on('data', (d) => (stdout += d));
     proc.stderr.on('data', (d) => (stderr += d));
 
     proc.on('close', (code) => {
+      clearTimeout(timer);
       resolve({ code, stdout, stderr });
     });
-    proc.on('error', reject);
+    proc.on('error', (err) => {
+      clearTimeout(timer);
+      reject(err);
+    });
   });
 }
 
