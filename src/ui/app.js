@@ -30,6 +30,28 @@ const badgeText = document.getElementById('badge-text');
 const executionTimer = document.getElementById('execution-timer');
 const toastEl = document.getElementById('toast');
 
+// Live Spectator & Match Panel Elements
+const formSpectate = document.getElementById('form-spectate');
+const spectatorStatusBadge = document.getElementById('spectator-status-badge');
+const spectatorStatusText = document.getElementById('spectator-status-text');
+const broadcastKeyVal = document.getElementById('broadcast-key-val');
+const btnCopyBroadcastKey = document.getElementById('btn-copy-broadcast-key');
+const btnStartSpectator = document.getElementById('btn-start-spectator');
+const btnStopSpectator = document.getElementById('btn-stop-spectator');
+const inputSpectatorPort = document.getElementById('spectator-port');
+
+const dashboardPanel = document.getElementById('dashboard-panel');
+const liveMatchPanel = document.getElementById('live-match-panel');
+const liveMatchBadge = document.getElementById('live-match-badge');
+const liveMatchBadgeText = document.getElementById('live-match-badge-text');
+const liveMatchStagePill = document.getElementById('live-match-stage-pill');
+const matchWaitingState = document.getElementById('match-waiting-state');
+const matchActiveCard = document.getElementById('match-active-card');
+const matchStageBackdrop = document.getElementById('match-stage-backdrop');
+const matchStageName = document.getElementById('match-stage-name');
+const matchStageTag = document.getElementById('match-stage-tag');
+const vsStageLabel = document.getElementById('vs-stage-label');
+
 // Console Tray Controls
 const btnTrayMin = document.getElementById('btn-tray-min');
 const btnTrayDefault = document.getElementById('btn-tray-default');
@@ -424,6 +446,11 @@ function getActiveCommandArgs() {
       return raw ? raw.split(/\s+/) : ['help'];
     }
 
+    case 'spectate': {
+      const port = inputSpectatorPort?.value || '51441';
+      return ['spectate', `--port=${port}`];
+    }
+
     default:
       return ['help'];
   }
@@ -444,6 +471,15 @@ function switchTab(tabKey) {
   forms.forEach(f => {
     f.classList.toggle('active', f.dataset.command === tabKey);
   });
+
+  // Toggle Live Match Panel vs Telemetry Dashboard Panel
+  if (tabKey === 'spectate') {
+    if (liveMatchPanel) liveMatchPanel.classList.remove('hidden');
+    if (dashboardPanel) dashboardPanel.classList.add('hidden');
+  } else {
+    if (liveMatchPanel) liveMatchPanel.classList.add('hidden');
+    if (dashboardPanel) dashboardPanel.classList.remove('hidden');
+  }
 
   if (tabKey === 'history') {
     fetchBatchHistory();
@@ -885,6 +921,24 @@ function renderDashboardData(pipeline, footprint, audit, currentBatch) {
 async function executeCommand() {
   if (isRunning) return;
 
+  if (currentTab === 'spectate') {
+    terminalOutput.innerHTML = '';
+    const port = inputSpectatorPort?.value || '51441';
+    appendTerminalText(`\x1b[36m$ node src/cli.js spectate --port=${port}\x1b[0m\n\n`);
+    if (trayState === 'min') {
+      setTrayState('default');
+    }
+    appendTerminalText(`\x1b[90mStarting live Slippi spectator session on port ${port}...\x1b[0m\n`);
+    try {
+      await startSpectatorSession();
+      appendTerminalText(`\x1b[32m✔ Spectator session listening! Broadcast Key: ${spectatorSessionState.broadcastKey || 'active'}\x1b[0m\n`);
+      appendTerminalText(`\x1b[90mInstructions: Open Slippi Launcher → Gameplay Broadcasts → Paste Broadcast Key → Start\x1b[0m\n`);
+    } catch (err) {
+      appendTerminalText(`\x1b[31m✖ Failed to start spectator session: ${err.message}\x1b[0m\n`);
+    }
+    return;
+  }
+
   const args = getActiveCommandArgs();
   const commandStr = `node src/cli.js ${args.join(' ')}`;
 
@@ -1208,3 +1262,397 @@ loadCharacters().then(() => updateCommandPreview());
 loadRecentGames();
 fetchDashboardTelemetry();
 fetchBatchHistory();
+
+// ==========================================================================
+// Live Slippi Remote Spectator Module
+// ==========================================================================
+
+const CHARACTER_MAP = {
+  0: { alias: 'falcon', name: 'Captain Falcon', initials: 'CF', colors: ['Default', 'Black', 'Red', 'White', 'Green', 'Blue'] },
+  1: { alias: 'dk', name: 'Donkey Kong', initials: 'DK', colors: ['Default', 'Black', 'Red', 'Blue', 'Green'] },
+  2: { alias: 'fox', name: 'Fox', initials: 'FX', colors: ['Default', 'Red', 'Blue', 'Green'] },
+  3: { alias: 'gnw', name: 'Mr. Game & Watch', initials: 'GW', colors: ['Default', 'Red', 'Blue', 'Green'] },
+  4: { alias: 'kirby', name: 'Kirby', initials: 'KB', colors: ['Default', 'Yellow', 'Blue', 'Red', 'Green', 'White'] },
+  5: { alias: 'bowser', name: 'Bowser', initials: 'BW', colors: ['Default', 'Red', 'Blue', 'Black'] },
+  6: { alias: 'link', name: 'Link', initials: 'LK', colors: ['Default', 'Red', 'Blue', 'Black', 'White'] },
+  7: { alias: 'luigi', name: 'Luigi', initials: 'LG', colors: ['Default', 'White', 'Blue', 'Red'] },
+  8: { alias: 'mario', name: 'Mario', initials: 'MR', colors: ['Default', 'Yellow', 'Black', 'Blue', 'Green'] },
+  9: { alias: 'marth', name: 'Marth', initials: 'MA', colors: ['Default', 'Red', 'Green', 'Black', 'White'] },
+  10: { alias: 'mewtwo', name: 'Mewtwo', initials: 'M2', colors: ['Default', 'Red', 'Blue', 'Green'] },
+  11: { alias: 'ness', name: 'Ness', initials: 'NS', colors: ['Default', 'Yellow', 'Blue', 'Green'] },
+  12: { alias: 'peach', name: 'Peach', initials: 'PC', colors: ['Default', 'Daisy', 'White', 'Blue', 'Green'] },
+  13: { alias: 'pikachu', name: 'Pikachu', initials: 'PI', colors: ['Default', 'Red', 'Party_Hat', 'Cowboy_Hat'] },
+  14: { alias: 'ics', name: 'Ice Climbers', initials: 'IC', colors: ['Default', 'Green', 'Orange', 'Red'] },
+  15: { alias: 'puff', name: 'Jigglypuff', initials: 'PU', colors: ['Default', 'Red', 'Blue', 'Headband', 'Crown'] },
+  16: { alias: 'samus', name: 'Samus', initials: 'SA', colors: ['Default', 'Pink', 'Black', 'Green', 'Purple'] },
+  17: { alias: 'yoshi', name: 'Yoshi', initials: 'YS', colors: ['Default', 'Red', 'Blue', 'Yellow', 'Pink', 'Cyan'] },
+  18: { alias: 'zelda', name: 'Zelda', initials: 'ZL', colors: ['Default', 'Red', 'Blue', 'Green', 'White'] },
+  19: { alias: 'sheik', name: 'Sheik', initials: 'SK', colors: ['Default', 'Red', 'Blue', 'Green', 'White'] },
+  20: { alias: 'falco', name: 'Falco', initials: 'FA', colors: ['Default', 'Red', 'Blue', 'Green'] },
+  21: { alias: 'yl', name: 'Young Link', initials: 'YL', colors: ['Default', 'Red', 'Blue', 'White', 'Black'] },
+  22: { alias: 'doc', name: 'Dr. Mario', initials: 'DC', colors: ['Default', 'Red', 'Blue', 'Green', 'Black'] },
+  23: { alias: 'roy', name: 'Roy', initials: 'RY', colors: ['Default', 'Red', 'Blue', 'Green', 'Yellow'] },
+  24: { alias: 'pichu', name: 'Pichu', initials: 'PCH', colors: ['Default', 'Red', 'Blue', 'Green'] },
+  25: { alias: 'ganon', name: 'Ganondorf', initials: 'GN', colors: ['Default', 'Red', 'Blue', 'Green', 'Purple'] },
+};
+
+const STAGE_ASSET_MAP = {
+  2: { name: 'Fountain of Dreams', file: 'fountain.jpg', legal: true },
+  3: { name: 'Pokémon Stadium', file: 'stadium.jpg', legal: true },
+  8: { name: "Yoshi's Story", file: 'yoshis.jpg', legal: true },
+  28: { name: 'Dream Land N64', file: 'dreamland.jpg', legal: true },
+  31: { name: 'Battlefield', file: 'battlefield.jpg', legal: true },
+  32: { name: 'Final Destination', file: 'finaldestination.jpg', legal: true },
+};
+
+function getCharacterPortraitUrl(characterId, costumeIndex = 0) {
+  const char = CHARACTER_MAP[characterId];
+  if (!char) return '/assets/character-icons/fox/Default.png';
+  const colors = char.colors || ['Default'];
+  let colorName = colors[costumeIndex] || colors[0] || 'Default';
+  colorName = colorName.replace(/ /g, '_');
+  return `/assets/character-icons/${char.alias}/${colorName}.png`;
+}
+
+function getCharacterInitials(characterId) {
+  return CHARACTER_MAP[characterId]?.initials || 'P';
+}
+
+function getStageDetails(stageId, rawName = '') {
+  if (STAGE_ASSET_MAP[stageId]) {
+    return STAGE_ASSET_MAP[stageId];
+  }
+  return {
+    name: rawName || 'Unknown Stage',
+    file: 'nonlegal.jpg',
+    legal: false,
+  };
+}
+
+let spectatorSessionState = {
+  status: 'IDLE',
+  broadcastKey: null,
+  port: 51441,
+  remotePeer: null,
+  currentGame: null,
+};
+
+let broadcastEventSource = null;
+let broadcastPollTimer = null;
+
+function updateSpectatorUI(session) {
+  if (!session) return;
+  spectatorSessionState = { ...spectatorSessionState, ...session };
+  const { status, broadcastKey } = spectatorSessionState;
+  const statusStr = (status || 'IDLE').toUpperCase();
+
+  // 1. Status badge in Left Panel
+  if (spectatorStatusText) spectatorStatusText.textContent = statusStr;
+  if (spectatorStatusBadge) {
+    spectatorStatusBadge.className = `badge-status ${statusStr.toLowerCase()}`;
+  }
+
+  // 2. Broadcast Key display
+  if (broadcastKeyVal) {
+    if (broadcastKey) {
+      broadcastKeyVal.textContent = broadcastKey;
+    } else {
+      broadcastKeyVal.textContent = 'NO ACTIVE SESSION';
+    }
+  }
+
+  // 3. Action buttons
+  const isListeningOrActive = statusStr !== 'IDLE';
+  if (btnStartSpectator) btnStartSpectator.disabled = isListeningOrActive;
+  if (btnStopSpectator) btnStopSpectator.disabled = !isListeningOrActive;
+  if (btnCopyBroadcastKey) btnCopyBroadcastKey.disabled = !broadcastKey;
+  if (inputSpectatorPort) inputSpectatorPort.disabled = isListeningOrActive;
+
+  // 4. Update live match panel header badge if not in game
+  if (statusStr !== 'IN_GAME' && liveMatchBadgeText && liveMatchBadge) {
+    liveMatchBadgeText.textContent = statusStr === 'LISTENING' ? 'LISTENING' : statusStr === 'CONNECTED' ? 'CONNECTED' : 'WAITING FOR GAME';
+    liveMatchBadge.className = `badge-status ${statusStr.toLowerCase()}`;
+  }
+
+  // 5. If status is IDLE or LISTENING and no game is active, ensure State A
+  if ((statusStr === 'IDLE' || statusStr === 'LISTENING') && !spectatorSessionState.currentGame) {
+    showMatchWaitingState();
+  }
+}
+
+function showMatchWaitingState() {
+  if (matchWaitingState) matchWaitingState.classList.remove('hidden');
+  if (matchActiveCard) matchActiveCard.classList.add('hidden');
+  if (liveMatchStagePill) liveMatchStagePill.textContent = '--';
+  const statusStr = (spectatorSessionState.status || 'IDLE').toUpperCase();
+  if (liveMatchBadgeText) liveMatchBadgeText.textContent = statusStr === 'LISTENING' ? 'LISTENING' : statusStr === 'CONNECTED' ? 'CONNECTED' : 'WAITING FOR GAME';
+  if (liveMatchBadge) liveMatchBadge.className = `badge-status ${statusStr.toLowerCase()}`;
+}
+
+function renderLiveMatchCard(game) {
+  if (!game) return;
+  spectatorSessionState.currentGame = game;
+
+  const stageInfo = getStageDetails(game.stageId, game.stageName);
+
+  // Update stage pill in header
+  if (liveMatchStagePill) {
+    liveMatchStagePill.textContent = `${stageInfo.name} - ${stageInfo.legal ? 'LEGAL' : 'NON-LEGAL'}`;
+  }
+
+  // Update Live Match badge
+  if (liveMatchBadgeText) liveMatchBadgeText.textContent = 'IN GAME';
+  if (liveMatchBadge) liveMatchBadge.className = 'badge-status in_game';
+
+  // Backdrop
+  if (matchStageBackdrop) {
+    matchStageBackdrop.style.backgroundImage = `url('/assets/stages/${stageInfo.file}')`;
+  }
+
+  // Meta bar
+  if (matchStageName) matchStageName.textContent = stageInfo.name;
+  if (matchStageTag) {
+    matchStageTag.textContent = stageInfo.legal ? 'LEGAL' : 'NON-LEGAL';
+    matchStageTag.className = `stage-legal-tag ${stageInfo.legal ? '' : 'non-legal'}`;
+  }
+  if (vsStageLabel) vsStageLabel.textContent = stageInfo.name;
+
+  // Players
+  const players = Array.isArray(game.players) ? game.players : [];
+  const p1 = players[0] || { port: 1, characterId: 2, characterName: 'Fox', costumeIndex: 0, connectCode: '--', displayName: 'Player 1' };
+  const p2 = players[1] || { port: 2, characterId: 9, characterName: 'Marth', costumeIndex: 0, connectCode: '--', displayName: 'Player 2' };
+
+  renderPlayerSlot(1, p1);
+  renderPlayerSlot(2, p2);
+
+  // Switch to State B
+  if (matchWaitingState) matchWaitingState.classList.add('hidden');
+  if (matchActiveCard) matchActiveCard.classList.remove('hidden');
+}
+
+function renderPlayerSlot(slotNum, player) {
+  const cardEl = document.getElementById(`p${slotNum}-card`);
+  const portEl = document.getElementById(`p${slotNum}-port`);
+  const codeEl = document.getElementById(`p${slotNum}-code`);
+  const nametagEl = document.getElementById(`p${slotNum}-nametag`);
+  const charNameEl = document.getElementById(`p${slotNum}-char-name`);
+  const imgEl = document.getElementById(`p${slotNum}-portrait-img`);
+  const fallbackEl = document.getElementById(`p${slotNum}-fallback-avatar`);
+
+  let portNum = player.port ?? slotNum;
+  if (portNum === 0) portNum = 1;
+  if (portEl) {
+    portEl.textContent = `PORT ${portNum}`;
+    portEl.className = `port-badge port-${portNum}`;
+  }
+
+  if (cardEl) {
+    cardEl.className = `player-match-card player-${slotNum} port-${portNum}`;
+  }
+
+  if (codeEl) {
+    codeEl.textContent = player.connectCode || 'LOCAL';
+  }
+
+  const charName = player.characterName || CHARACTER_MAP[player.characterId]?.name || 'Unknown';
+  const displayName = player.displayName || player.nametag || charName;
+
+  if (nametagEl) nametagEl.textContent = displayName;
+  if (charNameEl) charNameEl.textContent = charName;
+
+  const initials = CHARACTER_MAP[player.characterId]?.initials || `P${slotNum}`;
+  if (fallbackEl) {
+    fallbackEl.textContent = initials;
+    fallbackEl.style.display = 'none';
+  }
+
+  if (imgEl) {
+    imgEl.style.display = 'block';
+    const costumeIdx = player.costumeIndex ?? player.characterColor ?? 0;
+    const portraitUrl = getCharacterPortraitUrl(player.characterId, costumeIdx);
+    imgEl.src = portraitUrl;
+    imgEl.onerror = () => {
+      imgEl.style.display = 'none';
+      if (fallbackEl) fallbackEl.style.display = 'flex';
+    };
+  }
+}
+
+async function startSpectatorSession() {
+  const port = parseInt(inputSpectatorPort?.value, 10) || 51441;
+  if (btnStartSpectator) btnStartSpectator.disabled = true;
+  try {
+    const res = await fetch('/api/broadcast/session', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ port }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      throw new Error(data.error || 'Failed to start session');
+    }
+    updateSpectatorUI(data);
+    showToast(`Spectator session listening on port ${data.port}! 📡`);
+  } catch (err) {
+    console.error('Failed to start spectator session:', err);
+    showToast(`Error: ${err.message}`);
+    if (btnStartSpectator) btnStartSpectator.disabled = false;
+  }
+}
+
+async function stopSpectatorSession() {
+  if (btnStopSpectator) btnStopSpectator.disabled = true;
+  try {
+    const res = await fetch('/api/broadcast/session', {
+      method: 'DELETE',
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      throw new Error(data.error || 'Failed to stop session');
+    }
+    updateSpectatorUI({
+      status: 'IDLE',
+      broadcastKey: null,
+      currentGame: null,
+    });
+    showMatchWaitingState();
+    showToast('Spectator session stopped.');
+  } catch (err) {
+    console.error('Failed to stop spectator session:', err);
+    showToast(`Error: ${err.message}`);
+    if (btnStopSpectator) btnStopSpectator.disabled = false;
+  }
+}
+
+function copyBroadcastKey() {
+  const key = spectatorSessionState.broadcastKey || broadcastKeyVal?.textContent;
+  if (!key || key === 'NO ACTIVE SESSION') return;
+
+  const setFeedback = () => {
+    if (!btnCopyBroadcastKey) return;
+    const originalText = btnCopyBroadcastKey.innerHTML;
+    btnCopyBroadcastKey.textContent = 'Copied! ✓';
+    showToast('Broadcast key copied to clipboard! 📋');
+    setTimeout(() => {
+      btnCopyBroadcastKey.innerHTML = originalText;
+    }, 2000);
+  };
+
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(key).then(setFeedback).catch(() => {
+      fallbackCopy(key);
+      setFeedback();
+    });
+  } else {
+    fallbackCopy(key);
+    setFeedback();
+  }
+}
+
+function fallbackCopy(text) {
+  const ta = document.createElement('textarea');
+  ta.value = text;
+  ta.style.position = 'fixed';
+  ta.style.opacity = '0';
+  document.body.appendChild(ta);
+  ta.select();
+  try { document.execCommand('copy'); } catch (_) {}
+  document.body.removeChild(ta);
+}
+
+function connectBroadcastSSE() {
+  if (broadcastEventSource) {
+    try { broadcastEventSource.close(); } catch (_) {}
+  }
+
+  broadcastEventSource = new EventSource('/api/broadcast/events');
+
+  broadcastEventSource.onopen = () => {
+    if (broadcastPollTimer) {
+      clearInterval(broadcastPollTimer);
+      broadcastPollTimer = null;
+    }
+  };
+
+  broadcastEventSource.onmessage = (event) => {
+    try {
+      const msg = JSON.parse(event.data);
+      handleBroadcastEvent(msg);
+    } catch (err) {
+      console.warn('[SSE] Error parsing broadcast event:', err);
+    }
+  };
+
+  broadcastEventSource.onerror = () => {
+    if (!broadcastPollTimer) {
+      pollBroadcastSession();
+      broadcastPollTimer = setInterval(pollBroadcastSession, 4000);
+    }
+  };
+}
+
+function handleBroadcastEvent(msg) {
+  if (!msg || !msg.type) return;
+
+  switch (msg.type) {
+    case 'session': {
+      updateSpectatorUI(msg);
+      if (msg.currentGame) {
+        renderLiveMatchCard(msg.currentGame);
+      } else {
+        showMatchWaitingState();
+      }
+      break;
+    }
+    case 'statusChange': {
+      updateSpectatorUI(msg);
+      if (msg.status !== 'IN_GAME' && !spectatorSessionState.currentGame) {
+        showMatchWaitingState();
+      }
+      break;
+    }
+    case 'gameStart': {
+      const gameData = msg.data || msg;
+      updateSpectatorUI({ status: 'IN_GAME', currentGame: gameData });
+      renderLiveMatchCard(gameData);
+      showToast(`Live match started on ${gameData.stageName || 'Stage'}! ⚔️`);
+      break;
+    }
+    case 'gameEnd': {
+      const nextStatus = spectatorSessionState.status === 'IN_GAME' ? 'CONNECTED' : (spectatorSessionState.status || 'CONNECTED');
+      updateSpectatorUI({ status: nextStatus, currentGame: null });
+      showMatchWaitingState();
+      showToast('Live match ended. Waiting for next game.');
+      break;
+    }
+  }
+}
+
+async function pollBroadcastSession() {
+  try {
+    const res = await fetch('/api/broadcast/session');
+    if (res.ok) {
+      const session = await res.json();
+      updateSpectatorUI(session);
+      if (session.currentGame) {
+        renderLiveMatchCard(session.currentGame);
+      } else if (session.status !== 'IN_GAME') {
+        showMatchWaitingState();
+      }
+    }
+  } catch (_) {}
+}
+
+function initSpectatorService() {
+  btnStartSpectator?.addEventListener('click', startSpectatorSession);
+  btnStopSpectator?.addEventListener('click', stopSpectatorSession);
+  btnCopyBroadcastKey?.addEventListener('click', copyBroadcastKey);
+  inputSpectatorPort?.addEventListener('input', updateCommandPreview);
+
+  // Initial fetch and start SSE listener
+  pollBroadcastSession();
+  connectBroadcastSSE();
+}
+
+initSpectatorService();
+

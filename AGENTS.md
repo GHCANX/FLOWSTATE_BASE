@@ -1,8 +1,9 @@
 # Super Smash Bros. Melee Replay Engine Guidelines
 
 ## 1. Scope & Execution Boundaries
-- **Local Analysis Only**: Focus strictly on offline `.slp` replay parsing, quantitative metrics extraction, SQLite storage, and query analytics.
-- **Out of Scope**: Do NOT implement live broadcast capturing (OBS/Twitch), live Slippi relay listeners, or Dolphin/FFmpeg video rendering pipelines unless explicitly requested.
+- **Core Pipeline**: Offline `.slp` replay parsing, quantitative metrics extraction, SQLite storage, and query analytics.
+- **Live Spectator Integration**: Supported via `BroadcastService` (`src/broadcast/broadcastService.js`), exposing session provisioning (`POST /api/broadcast/session`), direct TCP listening (default port 51441 / dynamic fallback), and real-time SSE push (`/api/broadcast/events`).
+- **Out of Scope**: Do NOT implement external video broadcast capturing (OBS/Twitch) or Dolphin/FFmpeg video rendering pipelines unless explicitly requested.
 
 ## 2. Storage & Disk Hygiene (Zero Accumulation)
 - **Dual-Storage Pattern**:
@@ -39,4 +40,14 @@
 - **Multi-Batch Lifecycle Invariants**:
   - All ingestion operations must be tracked in SQLite (`batch_runs`) across the 5 canonical lifecycle stages: `queued` → `ingesting` → `parsing` → `storing` → `caching` → `completed` / `failed`.
   - The primary dashboard must auto-follow the latest active or completed batch by default, but support sticky selection of historical runs with an explicit context indicator and a one-click return to live auto-follow.
+
+## 8. Live Spectator & Stream Lifecycle Invariants
+- **In-Memory Streaming Only (Zero Disk Accumulation)**:
+  - Live broadcast streams must be piped directly into `SlpStream` / `SlpParser` in memory. Never write live incoming stream bytes to `./temp_slp/` or disk.
+- **Handshake Chunk Buffering**:
+  - Binary TCP packets may arrive fragmented down to 1 byte. Ingestion buffers must accumulate incoming chunks until the full 0x35 `gameStart` payload header is parsed.
+- **Parser State Reset on Disconnect**:
+  - Upon remote peer disconnection or stream termination, `SlpStream` instances must be cleanly discarded and re-instantiated to prevent stale parser states across consecutive matches.
+- **Socket & Port Lifecycle Hygiene**:
+  - Maintain an active `Set<net.Socket>` of connected client streams. On `DELETE /api/broadcast/session` or server shutdown, destroy all sockets before closing the server to prevent lingering handles and `EADDRINUSE` port collision errors.
 

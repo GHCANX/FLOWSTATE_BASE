@@ -205,4 +205,68 @@ When batching replays from external APIs or disk directories, pipelines must tra
   $$\text{Integrity} = \frac{\text{processed\_count}}{\text{processed\_count} + \text{failed\_count}} \times 100\%$$
 - **Storage Footprint**: Total bytes of all date-sharded payloads (`payloads/YYYY/MM/*.json.gz`) plus verification that `./temp_slp/` count $\equiv 0$.
 
+---
+
+## 6. Live Slippi Stream Ingestion & Remote Spectator Pipeline
+
+FlowState includes a live remote spectator receiver (`src/broadcast/broadcastService.js`) that provisions Slippi broadcast session keys (`SLP-XXXX-XXXX`) and accepts direct TCP relay streams.
+
+### Architecture & Data Flow
+
+```
+[Remote Broadcaster] ──(TCP Stream)──> [BroadcastService (Port 51441 / Dynamic)]
+                                                 │
+                                     In-Memory SlpStream
+                                                 │
+                                 ┌───────────────┴───────────────┐
+                                 ▼                               ▼
+                      [gameStart (0x35)]                  [gameEnd (0x39)]
+                                 │                               │
+                      Extraction (≤ 100ms)                Reset UI State
+                                 │                               │
+                                 └───────────────┬───────────────┘
+                                                 ▼
+                                     [SSE Push: /api/broadcast/events]
+                                                 ▼
+                                       [Browser Match Card]
+```
+
+### Key Implementation Principles
+
+1. **In-Memory SlpStream Piping**:
+   Always pipe network streams directly into `SlpStream` in buffer mode (`mode: 1`). Never accumulate `.slp` data to disk during live streaming.
+   ```javascript
+   import { SlpStream } from "@slippi/slippi-js/node";
+
+   const slpStream = new SlpStream({ mode: 1 });
+   slpStream.on("gameStart", (settings) => {
+     const metadata = extractMatchStartMetadata(settings);
+     sseBroadcast("gameStart", metadata);
+   });
+   ```
+
+2. **Sub-100ms Handshake Parsing**:
+   Extract only essential match metadata on `gameStart` (`stageId`, player connect codes, display names, character IDs, costume indices). Handshake extraction executes in ~1.5ms–4.0ms, avoiding full frame processing during match initiation.
+
+3. **Defensive Chunk Reassembly**:
+   TCP does not guarantee packet boundaries. Buffer partial binary chunks if smaller than expected event headers (< 29 bytes) before piping to `slpStream.write(chunk)`.
+
+4. **Socket Tracking & Clean Shutdown**:
+   Maintain an active socket set to ensure deterministic teardown:
+   ```javascript
+   const activeSockets = new Set();
+   server.on("connection", (socket) => {
+     activeSockets.add(socket);
+     socket.on("close", () => activeSockets.delete(socket));
+   });
+
+   function stopSession() {
+     for (const socket of activeSockets) {
+       socket.destroy();
+     }
+     activeSockets.clear();
+     server.close();
+   }
+   ```
+
 

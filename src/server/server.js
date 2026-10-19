@@ -7,6 +7,7 @@ import { CHARACTER_NAMES } from '../constants/characters.js';
 import { getDatabase, closeDatabase } from '../database/db.js';
 import { getStageName } from '../constants/stageGeometry.js';
 import { AnalyticsService } from '../query/analyticsService.js';
+import { getBroadcastService } from '../broadcast/broadcastService.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -23,6 +24,8 @@ const MIME_TYPES = {
   '.svg': 'image/svg+xml',
   '.png': 'image/png',
   '.ico': 'image/x-icon',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
 };
 
 /**
@@ -58,14 +61,21 @@ function parseJsonBody(req) {
  * @param {string} [options.host='127.0.0.1']
  * @returns {http.Server}
  */
-export function createServer() {
+export function createServer(options = {}) {
+  const broadcast = (options && options.broadcastService) || getBroadcastService();
+
+  // Defensively attach error listener to prevent unhandled EventEmitter error crashes
+  if (broadcast.listenerCount('error') === 0) {
+    broadcast.on('error', () => {});
+  }
+
   const server = http.createServer(async (req, res) => {
     const urlObj = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
     const pathname = urlObj.pathname;
 
     // CORS headers for local development flexibility
     res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
 
     if (req.method === 'OPTIONS') {
@@ -75,6 +85,74 @@ export function createServer() {
     }
 
     // 1. API Routes
+
+    // Broadcast Spectator Session & SSE Routes
+    if (pathname === '/api/broadcast/session' && req.method === 'POST') {
+      try {
+        const body = await parseJsonBody(req);
+        const session = await broadcast.startSession(body);
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(session));
+      } catch (err) {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: err.message }));
+      }
+      return;
+    }
+
+    if (pathname === '/api/broadcast/session' && req.method === 'GET') {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(broadcast.getSession()));
+      return;
+    }
+
+    if (pathname === '/api/broadcast/session' && req.method === 'DELETE') {
+      try {
+        const result = await broadcast.stopSession();
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(result));
+      } catch (err) {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: err.message }));
+      }
+      return;
+    }
+
+    if (pathname === '/api/broadcast/events' && req.method === 'GET') {
+      res.writeHead(200, {
+        'Content-Type': 'text/event-stream',
+        'Cache-Control': 'no-cache, no-transform',
+        'Connection': 'keep-alive',
+      });
+
+      const sendEvent = (type, payload) => {
+        try {
+          const eventObj =
+            payload && typeof payload === 'object' && !Array.isArray(payload)
+              ? { type, data: payload, ...payload }
+              : { type, data: payload };
+          res.write(`data: ${JSON.stringify(eventObj)}\n\n`);
+        } catch (_) {}
+      };
+
+      // Immediately emits 'session' event
+      sendEvent('session', broadcast.getSession());
+
+      const onStatusChange = (state) => sendEvent('statusChange', state);
+      const onGameStart = (game) => sendEvent('gameStart', game);
+      const onGameEnd = (end) => sendEvent('gameEnd', end);
+
+      broadcast.on('statusChange', onStatusChange);
+      broadcast.on('gameStart', onGameStart);
+      broadcast.on('gameEnd', onGameEnd);
+
+      req.on('close', () => {
+        broadcast.off('statusChange', onStatusChange);
+        broadcast.off('gameStart', onGameStart);
+        broadcast.off('gameEnd', onGameEnd);
+      });
+      return;
+    }
     if (pathname === '/api/characters' && req.method === 'GET') {
       const characters = Object.entries(CHARACTER_NAMES).map(([id, name]) => ({
         id: parseInt(id, 10),

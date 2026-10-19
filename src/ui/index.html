@@ -51,6 +51,7 @@
           <button class="tab-btn" role="tab" aria-selected="false" data-tab="status">Status</button>
           <button class="tab-btn" role="tab" aria-selected="false" data-tab="export">Export</button>
           <button class="tab-btn" role="tab" aria-selected="false" data-tab="custom">Custom</button>
+          <button class="tab-btn" role="tab" aria-selected="false" data-tab="spectate">Live Spectate</button>
         </nav>
 
         <!-- Command Form Panels -->
@@ -346,6 +347,70 @@
               </div>
             </fieldset>
           </form>
+
+          <!-- 9. Live Spectate Form -->
+          <form id="form-spectate" class="command-form" data-command="spectate">
+            <fieldset>
+              <legend>Slippi Remote Spectator</legend>
+              <p class="form-desc">Provision a broadcast key, connect to live Slippi tournament/ranked gameplay, and monitor matches in real time.</p>
+
+              <!-- Session Controls Card -->
+              <div class="spectator-card">
+                <div class="spectator-card-header">
+                  <span class="spectator-card-title">Spectator Session</span>
+                  <div id="spectator-status-badge" class="badge-status idle">
+                    <span class="badge-dot"></span>
+                    <span id="spectator-status-text">IDLE</span>
+                  </div>
+                </div>
+
+                <!-- Active Broadcast Key Display -->
+                <div class="broadcast-key-box">
+                  <span class="broadcast-key-label">ACTIVE BROADCAST KEY</span>
+                  <div class="broadcast-key-row">
+                    <code id="broadcast-key-val" class="broadcast-key-code">NO ACTIVE SESSION</code>
+                    <button type="button" id="btn-copy-broadcast-key" class="btn-secondary btn-sm" title="Copy Broadcast Key" disabled>
+                      Copy Key 📋
+                    </button>
+                  </div>
+                </div>
+
+                <!-- Session Actions: Start / Stop -->
+                <div class="form-row">
+                  <button type="button" id="btn-start-spectator" class="btn-primary btn-md">
+                    ▶ Start Listening
+                  </button>
+                  <button type="button" id="btn-stop-spectator" class="btn-danger btn-md" disabled>
+                    ■ Stop Session
+                  </button>
+                </div>
+
+                <!-- TCP Listener Port Config -->
+                <div class="form-group" style="margin-top: 8px;">
+                  <label for="spectator-port">Direct TCP Listener Port (Fallback)</label>
+                  <input type="number" id="spectator-port" value="51441" class="form-control" placeholder="51441">
+                </div>
+              </div>
+
+              <!-- Broadcaster Setup Instructions Card -->
+              <div class="spectator-instructions-card">
+                <div class="instructions-header">
+                  <span class="instructions-icon">ℹ️</span>
+                  <span class="instructions-title">Broadcaster Setup Instructions</span>
+                </div>
+                <p class="instructions-lead">Give the Broadcast Key to the player, who connects via Slippi Launcher:</p>
+                <div class="instructions-steps">
+                  <div class="step-item"><span class="step-num">1</span><span class="step-text">Open <strong>Slippi Launcher</strong></span></div>
+                  <div class="step-item"><span class="step-num">2</span><span class="step-text">Go to <strong>Gameplay Broadcasts</strong></span></div>
+                  <div class="step-item"><span class="step-num">3</span><span class="step-text">Paste <strong>Broadcast Key</strong></span></div>
+                  <div class="step-item"><span class="step-num">4</span><span class="step-text">Click <strong>Start</strong></span></div>
+                </div>
+                <div class="instructions-quote">
+                  <code>"Open Slippi Launcher → Gameplay Broadcasts → Paste Broadcast Key → Start"</code>
+                </div>
+              </div>
+            </fieldset>
+          </form>
         </div>
 
         <!-- Live Reactive Command Preview -->
@@ -369,7 +434,7 @@
       <!-- Right Workspace: Top Dashboard + Bottom Console Tray -->
       <div class="workspace-right">
         <!-- Top Panel: Analytics & Ingestion Dashboard -->
-        <section class="panel dashboard-panel" aria-labelledby="dashboard-heading">
+        <section class="panel dashboard-panel" id="dashboard-panel" aria-labelledby="dashboard-heading">
           <div class="panel-header dashboard-header">
             <div class="dashboard-title-group">
               <h2 id="dashboard-heading" class="panel-title">Pipeline Telemetry &amp; Batch Monitor</h2>
@@ -621,6 +686,95 @@
                         </div>
                       </div>
                     </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- Top Panel (Alternative): Live Match Spectator Panel -->
+        <section class="panel live-match-panel hidden" id="live-match-panel" aria-labelledby="live-match-heading">
+          <div class="panel-header live-match-header">
+            <div class="live-match-title-group">
+              <h2 id="live-match-heading" class="panel-title">Live Match Spectator</h2>
+              <div id="live-match-badge" class="badge-status idle">
+                <span class="badge-dot"></span>
+                <span id="live-match-badge-text">WAITING FOR GAME</span>
+              </div>
+            </div>
+            <div class="live-match-actions">
+              <span id="live-match-stage-pill" class="stage-pill">--</span>
+            </div>
+          </div>
+
+          <div class="live-match-body" id="live-match-body">
+            <!-- State A: Waiting for Live Game -->
+            <div id="match-waiting-state" class="match-waiting-container">
+              <div class="radar-pulse-ring"></div>
+              <div class="waiting-icon">📡</div>
+              <h3 class="waiting-title" id="waiting-title-text">Waiting for Live Game</h3>
+              <p class="waiting-desc" id="waiting-desc-text">
+                Spectator listener is active. Once both players select characters and stage, live match data will appear immediately.
+              </p>
+            </div>
+
+            <!-- State B: Active Live Match Card -->
+            <div id="match-active-card" class="match-active-card hidden">
+              <!-- Stage Backdrop Art -->
+              <div class="stage-backdrop" id="match-stage-backdrop">
+                <div class="stage-overlay"></div>
+              </div>
+
+              <div class="match-meta-bar">
+                <div class="stage-info-pill">
+                  <span class="stage-visual-icon">🏟️</span>
+                  <span class="stage-name-text" id="match-stage-name">Battlefield</span>
+                  <span class="stage-legal-tag" id="match-stage-tag">LEGAL</span>
+                </div>
+                <div class="live-pill">
+                  <span class="pulse-dot"></span>
+                  <span>LIVE MATCH</span>
+                </div>
+              </div>
+
+              <!-- 1v1 Arena Grid -->
+              <div class="versus-arena">
+                <!-- Player 1 -->
+                <div class="player-match-card player-1" id="p1-card">
+                  <div class="player-header">
+                    <span class="port-badge port-1" id="p1-port">PORT 1</span>
+                    <span class="connect-code-tag" id="p1-code">--</span>
+                  </div>
+                  <div class="character-portrait-frame">
+                    <img id="p1-portrait-img" class="portrait-img" src="" alt="Player 1" onerror="this.style.display='none'; document.getElementById('p1-fallback-avatar').style.display='flex';">
+                    <div id="p1-fallback-avatar" class="fallback-avatar" style="display: none;">P1</div>
+                  </div>
+                  <div class="player-details">
+                    <span class="player-nametag" id="p1-nametag">Player 1</span>
+                    <span class="character-name-label" id="p1-char-name">Character</span>
+                  </div>
+                </div>
+
+                <!-- Center VS Emblem -->
+                <div class="versus-center">
+                  <div class="versus-emblem">VS</div>
+                  <div class="versus-stage-label" id="vs-stage-label">Battlefield</div>
+                </div>
+
+                <!-- Player 2 -->
+                <div class="player-match-card player-2" id="p2-card">
+                  <div class="player-header">
+                    <span class="port-badge port-2" id="p2-port">PORT 2</span>
+                    <span class="connect-code-tag" id="p2-code">--</span>
+                  </div>
+                  <div class="character-portrait-frame">
+                    <img id="p2-portrait-img" class="portrait-img" src="" alt="Player 2" onerror="this.style.display='none'; document.getElementById('p2-fallback-avatar').style.display='flex';">
+                    <div id="p2-fallback-avatar" class="fallback-avatar" style="display: none;">P2</div>
+                  </div>
+                  <div class="player-details">
+                    <span class="player-nametag" id="p2-nametag">Player 2</span>
+                    <span class="character-name-label" id="p2-char-name">Character</span>
                   </div>
                 </div>
               </div>
