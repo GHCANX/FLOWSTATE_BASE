@@ -90,12 +90,18 @@ describe('Broadcast Spectator E2E', () => {
     const sessionRes = await requestHttp('POST', '/api/broadcast/session', { port: 0 });
     const tcpPort = sessionRes.json.port;
 
-    // Connect SSE client
+    // Connect SSE client with defensive timeout
     const sseEvents = [];
     let sseResolve;
-    const ssePromise = new Promise((resolve) => {
+    let sseReject;
+    const ssePromise = new Promise((resolve, reject) => {
       sseResolve = resolve;
+      sseReject = reject;
     });
+
+    const sseTimeout = setTimeout(() => {
+      sseReject(new Error('Timed out waiting for gameStart event via SSE stream'));
+    }, 5000);
 
     const sseReq = http.request(
       `http://127.0.0.1:${serverPort}/api/broadcast/events`,
@@ -113,6 +119,7 @@ describe('Broadcast Spectator E2E', () => {
                 const parsed = JSON.parse(trimmed.slice(6));
                 sseEvents.push(parsed);
                 if (parsed.type === 'gameStart') {
+                  clearTimeout(sseTimeout);
                   sseResolve();
                 }
               } catch (_) {}
@@ -121,40 +128,55 @@ describe('Broadcast Spectator E2E', () => {
         });
       }
     );
+    sseReq.on('error', (err) => {
+      clearTimeout(sseTimeout);
+      sseReject(err);
+    });
     sseReq.end();
 
-    // Stream binary replay data to TCP port
     const client = new net.Socket();
-    await new Promise((resolve) => client.connect(tcpPort, '127.0.0.1', resolve));
+    try {
+      // Stream binary replay data to TCP port
+      await new Promise((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error('Timed out connecting to TCP port')), 3000);
+        client.connect(tcpPort, '127.0.0.1', () => {
+          clearTimeout(timer);
+          resolve();
+        });
+        client.on('error', (err) => {
+          clearTimeout(timer);
+          reject(err);
+        });
+      });
 
-    const replayBytes = fs.readFileSync(UNRANKED_SLP);
-    const startTs = performance.now();
+      const replayBytes = fs.readFileSync(UNRANKED_SLP);
+      const startTs = performance.now();
 
-    // Send chunks
-    const chunkSize = 256;
-    for (let i = 0; i < replayBytes.length; i += chunkSize) {
-      client.write(replayBytes.subarray(i, i + chunkSize));
+      // Send chunks
+      const chunkSize = 256;
+      for (let i = 0; i < replayBytes.length; i += chunkSize) {
+        client.write(replayBytes.subarray(i, i + chunkSize));
+      }
+
+      // Wait for gameStart event
+      await ssePromise;
+      const extractionMs = performance.now() - startTs;
+
+      // Verification: latency must be <= 100ms
+      assert.ok(extractionMs < 100, `GameStart extraction exceeded 100ms: ${extractionMs.toFixed(2)}ms`);
+
+      // Verify parsed GameStart event payload
+      const gameStartEvent = sseEvents.find((e) => e.type === 'gameStart');
+      assert.ok(gameStartEvent);
+      assert.strictEqual(gameStartEvent.stageId, 31); // Battlefield
+      assert.strictEqual(gameStartEvent.stageName, 'Battlefield');
+      assert.strictEqual(gameStartEvent.players.length, 2);
+    } finally {
+      clearTimeout(sseTimeout);
+      try { client.destroy(); } catch (_) {}
+      try { sseReq.destroy(); } catch (_) {}
+      await requestHttp('DELETE', '/api/broadcast/session');
     }
-
-    // Wait for gameStart event
-    await ssePromise;
-    const extractionMs = performance.now() - startTs;
-
-    // Verification: latency must be <= 100ms
-    assert.ok(extractionMs < 100, `GameStart extraction exceeded 100ms: ${extractionMs.toFixed(2)}ms`);
-
-    // Verify parsed GameStart event payload
-    const gameStartEvent = sseEvents.find((e) => e.type === 'gameStart');
-    assert.ok(gameStartEvent);
-    assert.strictEqual(gameStartEvent.stageId, 31); // Battlefield
-    assert.strictEqual(gameStartEvent.stageName, 'Battlefield');
-    assert.strictEqual(gameStartEvent.players.length, 2);
-
-    client.destroy();
-    sseReq.destroy();
-
-    // Cleanup session
-    await requestHttp('DELETE', '/api/broadcast/session');
 
     // Zero disk accumulation verification
     const tempFiles = fs.readdirSync('./temp_slp').filter((f) => f.endsWith('.slp'));

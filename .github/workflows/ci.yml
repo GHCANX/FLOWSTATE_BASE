@@ -17,6 +17,7 @@ jobs:
   lint:
     name: Lint & Static Checks
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - name: Checkout Code
         uses: actions/checkout@v7
@@ -37,6 +38,7 @@ jobs:
     name: Test Suite (Node ${{ matrix.node-version }})
     needs: lint
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     strategy:
       fail-fast: false
       matrix:
@@ -61,16 +63,22 @@ jobs:
             exit 1
           }
 
-      - name: Run Unit, Integration & E2E Tests
-        run: npm test
+      - name: Run Unit, Integration & E2E Tests with Coverage
+        timeout-minutes: 4
+        run: |
+          echo "START test:coverage $(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+          npm run test:coverage
+          echo "END test:coverage $(date -u +"%Y-%m-%dT%H:%M:%SZ")"
 
-      - name: Run Test Coverage Reporter
-        run: npm run test:coverage
-
-      - name: Run Legacy Milestone & Adversarial Suites
-        run: npm run test:legacy
+      - name: Run Milestone & Adversarial Suites
+        timeout-minutes: 4
+        run: |
+          echo "START test:legacy $(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+          npm run test:legacy
+          echo "END test:legacy $(date -u +"%Y-%m-%dT%H:%M:%SZ")"
 
       - name: Verify Zero Replay Accumulation
+        timeout-minutes: 1
         run: |
           SLP_COUNT=$(find temp_slp/ -name "*.slp" 2>/dev/null | wc -l)
           if [ "$SLP_COUNT" -ne 0 ]; then
@@ -83,6 +91,7 @@ jobs:
     needs: [lint, test]
     if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - name: Checkout Code
         uses: actions/checkout@v7

@@ -60,6 +60,24 @@ function sleep(ms) {
 }
 
 /**
+ * Waits for an event from an EventEmitter with an explicit timeout to prevent hanging test suites.
+ */
+function waitForEventEmitter(emitter, eventName, timeoutMs = 5000, errorMsg = null) {
+  return new Promise((resolve, reject) => {
+    let handler;
+    const timer = setTimeout(() => {
+      if (handler) emitter.removeListener(eventName, handler);
+      reject(new Error(errorMsg || `Timed out after ${timeoutMs}ms waiting for event '${eventName}'`));
+    }, timeoutMs);
+    handler = (...args) => {
+      clearTimeout(timer);
+      resolve(...args);
+    };
+    emitter.once(eventName, handler);
+  });
+}
+
+/**
  * Cleanly disconnects a client socket and waits for the server to process the close event
  * and remove the socket from activeSockets.
  */
@@ -72,6 +90,13 @@ async function disconnectAndDrain(client, broadcast) {
   while (broadcast.activeSockets.size > 0 && Date.now() - start < 1500) {
     await sleep(20);
   }
+  // Safety fallback: if lingering sockets exist, force destroy them to avoid stale state
+  if (broadcast.activeSockets.size > 0) {
+    for (const s of broadcast.activeSockets) {
+      try { s.destroy(); } catch (_) {}
+    }
+    broadcast.activeSockets.clear();
+  }
 }
 
 // SSE helper that connects to an event stream and collects parsed events
@@ -81,7 +106,15 @@ function openSseStream(url) {
   let reqStream = null;
 
   const streamPromise = new Promise((resolve, reject) => {
+    const connTimer = setTimeout(() => {
+      if (reqStream) {
+        try { reqStream.destroy(); } catch (_) {}
+      }
+      reject(new Error('Timed out waiting for SSE connection response headers'));
+    }, 5000);
+
     reqStream = http.request(url, (res) => {
+      clearTimeout(connTimer);
       if (res.statusCode !== 200) {
         reject(new Error(`SSE connection failed with status ${res.statusCode}`));
         return;
@@ -110,6 +143,7 @@ function openSseStream(url) {
     });
 
     reqStream.on('error', (err) => {
+      clearTimeout(connTimer);
       if (!isClosed) {
         // Only reject if disconnected unexpectedly before intentional close
       }
@@ -230,16 +264,24 @@ async function testSection2_RealTimeStreamSimulationAndExtraction() {
   assert.ok(slpBuffer1.length > 0, 'Replay buffer must not be empty');
 
   let game1Data = null;
-  const game1Promise = new Promise((resolve) => {
-    broadcastService.once('gameStart', (game) => {
-      game1Data = game;
-      resolve();
-    });
+  const game1Promise = waitForEventEmitter(
+    broadcastService,
+    'gameStart',
+    5000,
+    'Timed out waiting for gameStart on unranked_game1.slp'
+  ).then((game) => {
+    game1Data = game;
   });
 
   // Connect TCP client to session port
   const client1 = net.connect(tcpPort, '127.0.0.1');
-  await new Promise((resolve) => client1.on('connect', resolve));
+  await new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('Timed out connecting client1')), 3000);
+    client1.on('connect', () => {
+      clearTimeout(timer);
+      resolve();
+    });
+  });
 
   // High-resolution measurement from transmission start to gameStart event
   const t0_game1 = performance.now();
@@ -288,16 +330,24 @@ async function testSection2_RealTimeStreamSimulationAndExtraction() {
   assert.ok(slpBuffer2.length > 0, 'Replay buffer 2 must not be empty');
 
   let game2Data = null;
-  const game2Promise = new Promise((resolve) => {
-    broadcastService.once('gameStart', (game) => {
-      game2Data = game;
-      resolve();
-    });
+  const game2Promise = waitForEventEmitter(
+    broadcastService,
+    'gameStart',
+    5000,
+    'Timed out waiting for gameStart on displayNameAndConnectCodeInGameStart.slp'
+  ).then((game) => {
+    game2Data = game;
   });
 
   // Connect new simulated TCP client
   const client2 = net.connect(tcpPort, '127.0.0.1');
-  await new Promise((resolve) => client2.on('connect', resolve));
+  await new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('Timed out connecting client2')), 3000);
+    client2.on('connect', () => {
+      clearTimeout(timer);
+      resolve();
+    });
+  });
 
   // High-resolution measurement from transmission start to gameStart event
   const t0_game2 = performance.now();
@@ -422,11 +472,27 @@ async function testSection4_ResourceCleanupAndPortDisposal() {
 
   // Connect a dummy TCP client to prove socket disposal on session deletion
   const dummyClient = net.connect(tcpPortToRelease, '127.0.0.1');
-  await new Promise((resolve) => dummyClient.on('connect', resolve));
+  await new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('Timed out connecting dummy TCP client')), 3000);
+    dummyClient.on('connect', () => {
+      clearTimeout(timer);
+      resolve();
+    });
+    dummyClient.on('error', (err) => {
+      clearTimeout(timer);
+      reject(err);
+    });
+  });
   assert.strictEqual(broadcastService.activeSockets.size, 1, 'Should have 1 active client socket before DELETE');
 
-  // Set up promise to observe client socket termination
-  const clientClosedPromise = new Promise((resolve) => dummyClient.on('close', resolve));
+  // Set up promise to observe client socket termination with explicit timeout
+  const clientClosedPromise = new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('Timed out waiting for dummy client socket closure')), 3000);
+    dummyClient.on('close', () => {
+      clearTimeout(timer);
+      resolve();
+    });
+  });
 
   // 4.1 Send DELETE /api/broadcast/session
   const deleteRes = await requestHttp(`${baseUrl}/api/broadcast/session`, { method: 'DELETE' });
@@ -448,12 +514,15 @@ async function testSection4_ResourceCleanupAndPortDisposal() {
   let rebindError = null;
 
   await new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('Timed out probing port rebind')), 3000);
     probeServer.once('error', (err) => {
+      clearTimeout(timer);
       rebindError = err;
       reject(err);
     });
 
     probeServer.listen(tcpPortToRelease, '127.0.0.1', () => {
+      clearTimeout(timer);
       resolve();
     });
   }).catch((err) => {
@@ -527,10 +596,10 @@ async function testSection6_RegressionVerificationAndRuntimeCompliance() {
   }
   resetBroadcastService();
 
-  // Run npm test to verify full regression safety
-  console.log('  Executing regression check: npm test (stage1_local_test.js & server_test.js)...');
-  const npmTestResult = await new Promise((resolve, reject) => {
-    const child = spawn('npm', ['test'], {
+  // Execute direct regression check of stage1 local engine & server without recursive npm test storm
+  console.log('  Executing regression check: stage1_local_test.js & server_test.js...');
+  const runSubTest = (scriptPath) => new Promise((resolve, reject) => {
+    const child = spawn('node', ['--no-warnings', scriptPath], {
       cwd: process.cwd(),
       env: { ...process.env, NODE_NO_WARNINGS: '1' },
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -538,22 +607,37 @@ async function testSection6_RegressionVerificationAndRuntimeCompliance() {
 
     let stdout = '';
     let stderr = '';
+    const timer = setTimeout(() => {
+      child.kill('SIGKILL');
+      reject(new Error(`Timed out after 15s executing ${scriptPath}`));
+    }, 15000);
+
     child.stdout.on('data', (d) => { stdout += d.toString(); });
     child.stderr.on('data', (d) => { stderr += d.toString(); });
 
     child.on('close', (code) => {
+      clearTimeout(timer);
       resolve({ code, stdout, stderr });
     });
-    child.on('error', reject);
+    child.on('error', (err) => {
+      clearTimeout(timer);
+      reject(err);
+    });
   });
 
-  if (npmTestResult.code !== 0) {
-    console.error('npm test failed with output:');
-    console.error(npmTestResult.stdout);
-    console.error(npmTestResult.stderr);
+  const stage1Res = await runSubTest('test/stage1_local_test.js');
+  if (stage1Res.code !== 0) {
+    console.error(`stage1_local_test.js failed:\n${stage1Res.stderr || stage1Res.stdout}`);
   }
-  assert.strictEqual(npmTestResult.code, 0, `npm test must pass with exit code 0 (got ${npmTestResult.code})`);
-  console.log('  ✔ npm test passed cleanly with code 0 (zero regressions across local engine, storage, and server)');
+  assert.strictEqual(stage1Res.code, 0, 'stage1_local_test.js must pass');
+
+  const serverRes = await runSubTest('test/server_test.js');
+  if (serverRes.code !== 0) {
+    console.error(`server_test.js failed:\n${serverRes.stderr || serverRes.stdout}`);
+  }
+  assert.strictEqual(serverRes.code, 0, 'server_test.js must pass');
+
+  console.log('  ✔ Regression checks passed cleanly with code 0 (zero regressions across local engine, storage, and server)');
 }
 
 /**
