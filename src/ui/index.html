@@ -52,6 +52,7 @@
           <button class="tab-btn" role="tab" aria-selected="false" data-tab="export">Export</button>
           <button class="tab-btn" role="tab" aria-selected="false" data-tab="custom">Custom</button>
           <button class="tab-btn" role="tab" aria-selected="false" data-tab="spectate">Live Spectate</button>
+          <button class="tab-btn" role="tab" aria-selected="false" data-tab="sprites">Move Sprites</button>
         </nav>
 
         <!-- Command Form Panels -->
@@ -407,6 +408,53 @@
                 </div>
                 <div class="instructions-quote">
                   <code>"Open Slippi Launcher → Gameplay Broadcasts → Paste Broadcast Key → Start"</code>
+                </div>
+              </div>
+            </fieldset>
+          </form>
+
+          <!-- 10. Move Sprites Viewer Form -->
+          <form id="form-sprites" class="command-form" data-command="sprites">
+            <fieldset>
+              <legend>Melee Move Sprite &amp; Animation Viewer</legend>
+              <p class="form-desc">Inspect high-fidelity 60 FPS move animations, frame counts, and special action states across the Melee roster.</p>
+
+              <div class="character-select-grid">
+                <div class="form-group">
+                  <label for="sprites-char-select">Fighter</label>
+                  <select id="sprites-char-select" class="form-control" name="char">
+                    <option value="fox" selected>Fox</option>
+                    <option value="falco">Falco</option>
+                    <option value="marth">Marth</option>
+                    <option value="sheik">Sheik</option>
+                    <option value="captainfalcon">Captain Falcon</option>
+                    <option value="peach">Peach</option>
+                    <option value="jigglypuff">Jigglypuff</option>
+                    <option value="samus">Samus</option>
+                  </select>
+                </div>
+
+                <div class="form-group">
+                  <label for="sprites-move-select">Attack / Move</label>
+                  <select id="sprites-move-select" class="form-control" name="move">
+                    <option value="shine" selected>Reflector (Shine)</option>
+                    <option value="usmash">Up Smash</option>
+                    <option value="dair">Down Aerial</option>
+                    <option value="blaster">Blaster</option>
+                  </select>
+                </div>
+              </div>
+
+              <!-- Animated Sprite Card -->
+              <div class="sprite-viewer-card">
+                <div class="sprite-img-container">
+                  <img id="sprite-preview-img" src="/assets/sprites/fox/shine.gif" alt="Move Animation" class="sprite-img-preview">
+                </div>
+                <div class="sprite-meta-badge">
+                  <span id="sprite-meta-char" class="sprite-meta-tag">Fox</span>
+                  <span id="sprite-meta-move" class="sprite-meta-tag">Down-B (Reflector)</span>
+                  <span id="sprite-meta-ident" class="sprite-meta-tag">REFLECTOR_GROUND_STARTUP</span>
+                  <span id="sprite-meta-state" class="sprite-meta-tag">ActionState: 360</span>
                 </div>
               </div>
             </fieldset>

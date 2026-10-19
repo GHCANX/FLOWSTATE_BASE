@@ -8,6 +8,7 @@ import { getDatabase, closeDatabase } from '../database/db.js';
 import { getStageName } from '../constants/stageGeometry.js';
 import { AnalyticsService } from '../query/analyticsService.js';
 import { getBroadcastService } from '../broadcast/broadcastService.js';
+import { fetchSprite } from '../../scripts/fetchSprites.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -23,6 +24,7 @@ const MIME_TYPES = {
   '.json': 'application/json; charset=utf-8',
   '.svg': 'image/svg+xml',
   '.png': 'image/png',
+  '.gif': 'image/gif',
   '.ico': 'image/x-icon',
   '.jpg': 'image/jpeg',
   '.jpeg': 'image/jpeg',
@@ -86,7 +88,7 @@ export function createServer(options = {}) {
 
     // 1. API Routes
 
-    // Broadcast Spectator Session & SSE Routes
+    // Broadcast Spectator Session Routes
     if (pathname === '/api/broadcast/session' && req.method === 'POST') {
       try {
         const body = await parseJsonBody(req);
@@ -481,6 +483,47 @@ export function createServer(options = {}) {
         res.end(JSON.stringify({ error: err.message }));
       }
       return;
+    }
+
+    // Sprites Manifest
+    if (pathname === '/api/sprites/manifest' && req.method === 'GET') {
+      const manifestPath = path.join(UI_DIR, 'assets', 'sprites', 'manifest.json');
+      if (fs.existsSync(manifestPath)) {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        fs.createReadStream(manifestPath).pipe(res);
+      } else {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ characters: {} }));
+      }
+      return;
+    }
+
+    // Dynamic Sprite Endpoint with On-Demand Cache
+    if (pathname.startsWith('/api/sprites/') && req.method === 'GET') {
+      const parts = pathname.slice('/api/sprites/'.length).split('/');
+      if (parts.length >= 2) {
+        const char = parts[0].toLowerCase();
+        const move = parts[1].replace(/\.gif$/i, '').toLowerCase();
+        const localPath = path.join(UI_DIR, 'assets', 'sprites', char, `${move}.gif`);
+
+        if (fs.existsSync(localPath)) {
+          res.writeHead(200, { 'Content-Type': 'image/gif', 'Cache-Control': 'public, max-age=31536000' });
+          fs.createReadStream(localPath).pipe(res);
+          return;
+        }
+
+        // On-demand fetch from FightCore CDN
+        fetchSprite(char, move)
+          .then(downloadedPath => {
+            res.writeHead(200, { 'Content-Type': 'image/gif', 'Cache-Control': 'public, max-age=31536000' });
+            fs.createReadStream(downloadedPath).pipe(res);
+          })
+          .catch(err => {
+            res.writeHead(404, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: err.message }));
+          });
+        return;
+      }
     }
 
     if (pathname === '/api/abort' && req.method === 'POST') {
