@@ -28,3 +28,15 @@
   - Always execute CLI scripts with `node --no-warnings`.
   - Pass `{ env: { ...process.env, NODE_NO_WARNINGS: '1' } }` when spawning background or child CLI processes.
   - Server-Sent Events (SSE) streaming filters must strip advisory asm.js strings from stderr before forwarding output to browser consoles to avoid false positive error states.
+
+## 7. UI Layout, Ingestion Telemetry & Scope Isolation
+- **1080p Viewport Containment**:
+  - The application interface must fit within a standard 1080p display viewport without page scrolling (`overflow: hidden` on viewport roots, fixed `100vh` bounding container).
+  - The execution console must remain constrained to the lower screen boundary with internal scrolling and flexible tray sizing (minimized, default compact, maximized).
+- **Processing Scope Isolation (No In-Game Mechanics in Pipeline Views)**:
+  - Ingestion and pipeline processing views must strictly render operational infrastructure telemetry: throughput ($RPM$), batch completion $\%$, discovered totals, parse integrity errors, cache hit/dedup ratio, storage footprint (compressed `.json.gz` MBs), and zero `.slp` buffer verification.
+  - In-game player-mechanics stats (*L-cancel rate, wavedash counts, dash turns, IPM*) must NEVER be displayed on the ingestion/processing dashboard view. They belong strictly to downstream tactical scouting and replay review views.
+- **Multi-Batch Lifecycle Invariants**:
+  - All ingestion operations must be tracked in SQLite (`batch_runs`) across the 5 canonical lifecycle stages: `queued` → `ingesting` → `parsing` → `storing` → `caching` → `completed` / `failed`.
+  - The primary dashboard must auto-follow the latest active or completed batch by default, but support sticky selection of historical runs with an explicit context indicator and a one-click return to live auto-follow.
+

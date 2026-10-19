@@ -178,3 +178,31 @@ node src/cli.js serve --port=8080  # Custom port
 - **Process Abort (`/api/abort`)**: Dispatches `SIGINT` to the running child process with a fallback `SIGKILL` timer.
 - **Advisory Filtering**: The server filters out `Invalid asm.js` warnings from the stderr stream to maintain clean output in the frontend log viewer.
 
+---
+
+## 5. Batch Ingestion Lifecycle & Operational Telemetry
+
+### 5-Stage Lifecycle State Machine
+When batching replays from external APIs or disk directories, pipelines must transition through 5 explicit lifecycle states persisted to SQLite:
+
+```
+[QUEUED] ➔ [INGESTING] ➔ [PARSING] ➔ [STORING] ➔ [CACHING] ➔ [COMPLETED / FAILED]
+```
+
+1. **`QUEUED`**: Batch ID generated (`batch_<timestamp>_<rand>`), filter parameters serialized (`filter_criteria`), and initial row created in `batch_runs`.
+2. **`INGESTING`**: Replay manifests discovered from Lunar Melee API or local disk, applying date, connect code, character, stage, and duration filters.
+3. **`PARSING`**: Rate-limited download of `.slp` files to `./temp_slp/`, extracting frame data via single-pass UBJSON parser.
+4. **`STORING`**: Committing transactional index records and summary metrics to `analytics.db` and writing date-sharded `.json.gz` payloads.
+5. **`CACHING`**: Deduplication checks completed, cumulative storage bytes committed, and `./temp_slp/` buffer purged to 0 files.
+6. **`COMPLETED` / `FAILED`**: Final throughput calculated ($\text{processed} / \text{elapsed minutes}$), completed timestamp set, and errors logged.
+
+### Operational Metric Formulas
+- **Throughput ($RPM$)**:
+  $$\text{Throughput} = \frac{\text{processed\_count}}{\max(0.01, (\text{now} - \text{started\_at})_{\text{min}})}$$
+- **Deduplication / Cache Hit Ratio**:
+  $$\text{Dedup Ratio} = \frac{\text{processed\_count}}{\text{discovered\_count}} \times 100\%$$
+- **Parse Integrity Rate**:
+  $$\text{Integrity} = \frac{\text{processed\_count}}{\text{processed\_count} + \text{failed\_count}} \times 100\%$$
+- **Storage Footprint**: Total bytes of all date-sharded payloads (`payloads/YYYY/MM/*.json.gz`) plus verification that `./temp_slp/` count $\equiv 0$.
+
+
