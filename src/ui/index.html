@@ -44,6 +44,7 @@
         <nav class="command-tabs" role="tablist" aria-label="CLI Command Categories">
           <button class="tab-btn active" role="tab" aria-selected="true" data-tab="matchup">Matchup</button>
           <button class="tab-btn" role="tab" aria-selected="false" data-tab="batch">Batch Ingestion</button>
+          <button class="tab-btn" role="tab" aria-selected="false" data-tab="history">Jobs / History</button>
           <button class="tab-btn" role="tab" aria-selected="false" data-tab="player">Player Scout</button>
           <button class="tab-btn" role="tab" aria-selected="false" data-tab="game">Replay Inspector</button>
           <button class="tab-btn" role="tab" aria-selected="false" data-tab="overview">Overview</button>
@@ -113,8 +114,132 @@
                   </label>
                 </div>
               </div>
+
+              <!-- Granular Replay Filters Accordion -->
+              <div class="filter-accordion">
+                <button type="button" id="btn-toggle-filters" class="accordion-toggle" aria-expanded="false">
+                  <div class="toggle-title">
+                    <span class="toggle-icon">⚙</span>
+                    <span>Granular Replay Filters</span>
+                    <span id="filter-badge" class="filter-count-badge hidden">0 active</span>
+                  </div>
+                  <span id="filter-chevron" class="accordion-chevron">▶</span>
+                </button>
+
+                <div id="filter-panel" class="filter-panel hidden">
+                  <!-- Section A: Date Range -->
+                  <div class="filter-section">
+                    <span class="filter-section-title">Date Range Criteria</span>
+                    <div class="quick-tags date-presets">
+                      <button type="button" class="tag-pill date-pill" data-preset="today">Today</button>
+                      <button type="button" class="tag-pill date-pill" data-preset="last7">Last 7 Days</button>
+                      <button type="button" class="tag-pill date-pill" data-preset="mtd">Month-to-Date</button>
+                      <button type="button" class="tag-pill date-pill active" data-preset="all">All Time</button>
+                    </div>
+                    <div class="form-row">
+                      <div class="form-group">
+                        <label for="batch-filter-start-date">Start Date</label>
+                        <input type="date" id="batch-filter-start-date" class="form-control">
+                      </div>
+                      <div class="form-group">
+                        <label for="batch-filter-end-date">End Date</label>
+                        <input type="date" id="batch-filter-end-date" class="form-control">
+                      </div>
+                    </div>
+                    <div id="date-error-msg" class="validation-msg hidden"></div>
+                  </div>
+
+                  <!-- Section B: Player Identifiers -->
+                  <div class="filter-section">
+                    <span class="filter-section-title">Player Identifiers & Source</span>
+                    <div class="form-row">
+                      <div class="form-group">
+                        <label for="batch-filter-p1-code">Connect Code (P1)</label>
+                        <input type="text" id="batch-filter-p1-code" class="form-control uppercase" placeholder="e.g. MANG#0">
+                      </div>
+                      <div class="form-group">
+                        <label for="batch-filter-p2-code">Opponent Code (P2)</label>
+                        <input type="text" id="batch-filter-p2-code" class="form-control uppercase" placeholder="e.g. IBDW#0">
+                      </div>
+                    </div>
+                    <div id="code-error-msg" class="validation-msg hidden"></div>
+
+                    <div class="form-group">
+                      <label for="batch-filter-source">Match Source</label>
+                      <select id="batch-filter-source" class="form-control">
+                        <option value="" selected>All Sources (Tournament, Netplay, Ranked)</option>
+                        <option value="tournament">Tournament Only</option>
+                        <option value="netplay">Netplay (Online Direct)</option>
+                        <option value="ranked">Slippi Ranked</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  <!-- Section C: Match Context & Stage -->
+                  <div class="filter-section">
+                    <span class="filter-section-title">Matchup & Stage Context</span>
+                    <div class="form-row">
+                      <div class="form-group">
+                        <label for="batch-filter-char-a">Character 1</label>
+                        <select id="batch-filter-char-a" class="form-control">
+                          <option value="" selected>Any Character</option>
+                        </select>
+                      </div>
+                      <div class="form-group">
+                        <label for="batch-filter-char-b">Character 2</label>
+                        <select id="batch-filter-char-b" class="form-control">
+                          <option value="" selected>Any Opponent</option>
+                        </select>
+                      </div>
+                    </div>
+
+                    <div class="form-row">
+                      <div class="form-group">
+                        <label for="batch-filter-stage">Stage Filter</label>
+                        <select id="batch-filter-stage" class="form-control">
+                          <option value="" selected>All Stages</option>
+                          <option value="legal">All Legal Stages (BF, FD, DL, YS, FoD, PS)</option>
+                          <option value="31">Battlefield</option>
+                          <option value="32">Final Destination</option>
+                          <option value="28">Dream Land N64</option>
+                          <option value="8">Yoshi's Story</option>
+                          <option value="2">Fountain of Dreams</option>
+                          <option value="3">Pokémon Stadium</option>
+                        </select>
+                      </div>
+                      <div class="form-group">
+                        <label for="batch-filter-min-duration">Min Duration (Sec)</label>
+                        <input type="number" id="batch-filter-min-duration" min="0" max="480" step="5" value="0" class="form-control" placeholder="0 = all">
+                      </div>
+                    </div>
+                  </div>
+
+                  <!-- Filter Action Buttons -->
+                  <div class="filter-actions-bar">
+                    <button type="button" id="btn-reset-filters" class="btn-secondary btn-sm">↺ Clear Filters</button>
+                    <span class="filter-hint">Filters apply to next batch query</span>
+                  </div>
+                </div>
+              </div>
             </fieldset>
           </form>
+
+          <!-- 2b. Jobs / History Panel -->
+          <div id="form-history" class="command-form" data-command="history">
+            <fieldset>
+              <legend>Operational Batch History</legend>
+              <p class="form-desc">Monitor past and active batch ingestion runs. Click any batch to inspect its operational telemetry in the dashboard.</p>
+              
+              <div class="history-actions-bar">
+                <span id="history-total-count" class="history-count-badge">0 Runs Recorded</span>
+                <button type="button" id="btn-refresh-history" class="btn-secondary btn-sm" title="Refresh Batch List">↺ Refresh</button>
+              </div>
+
+              <div id="history-list" class="history-list" role="list" aria-label="Batch execution history">
+                <div class="history-empty">No batch execution records found. Start an ingestion batch to generate history.</div>
+              </div>
+            </fieldset>
+          </div>
 
           <!-- 3. Player Scout Form -->
           <form id="form-player" class="command-form" data-command="player">
@@ -247,13 +372,23 @@
         <section class="panel dashboard-panel" aria-labelledby="dashboard-heading">
           <div class="panel-header dashboard-header">
             <div class="dashboard-title-group">
-              <h2 id="dashboard-heading" class="panel-title">Pipeline Telemetry &amp; Melee Analytics</h2>
+              <h2 id="dashboard-heading" class="panel-title">Pipeline Telemetry &amp; Batch Monitor</h2>
               <div class="live-indicator">
                 <span class="live-dot"></span>
                 <span class="live-text" id="live-sync-text">LIVE SYNC</span>
               </div>
               <span id="last-synced-time" class="last-sync-display">Updated Just Now</span>
             </div>
+            
+            <!-- Dashboard Context / Sticky Historical Banner -->
+            <div id="dashboard-context-banner" class="context-banner live-mode">
+              <span class="context-dot"></span>
+              <span id="context-banner-text">Viewing: Latest Batch (Live Auto-Follow)</span>
+              <button type="button" id="btn-jump-latest" class="btn-jump-latest hidden" title="Return to real-time latest batch focus">
+                Jump to Latest Run ➔
+              </button>
+            </div>
+
             <div class="dashboard-actions">
               <button type="button" id="btn-refresh-dashboard" class="btn-secondary btn-sm" title="Refresh Telemetry">
                 <span id="refresh-spinner" class="refresh-icon">↺</span> Refresh
@@ -290,39 +425,39 @@
 
             <!-- Active Content Container -->
             <div id="dashboard-content" class="dashboard-content">
-              <!-- Row 1: KPI Stat Cards -->
+              <!-- Row 1: Operational Pipeline KPI Cards -->
               <div class="kpi-grid">
-                <div class="kpi-card" id="kpi-total-games">
-                  <span class="kpi-label">TOTAL GAMES</span>
-                  <span class="kpi-value" id="kpi-games-val">--</span>
-                  <span class="kpi-sub" id="kpi-games-sub">Committed to SQLite</span>
+                <div class="kpi-card" id="kpi-batch-status">
+                  <span class="kpi-label">BATCH LIFECYCLE</span>
+                  <span class="kpi-value text-cyan" id="kpi-batch-lifecycle-val">IDLE</span>
+                  <span class="kpi-sub" id="kpi-batch-lifecycle-sub">No active batch</span>
                 </div>
-                <div class="kpi-card" id="kpi-success-rate">
-                  <span class="kpi-label">INGESTION HEALTH</span>
-                  <span class="kpi-value text-green" id="kpi-health-val">--%</span>
-                  <span class="kpi-sub" id="kpi-health-sub">0 failures recorded</span>
+                <div class="kpi-card" id="kpi-throughput">
+                  <span class="kpi-label">INGESTION THROUGHPUT</span>
+                  <span class="kpi-value text-green" id="kpi-throughput-val">--</span>
+                  <span class="kpi-sub" id="kpi-throughput-sub">Replays per minute</span>
                 </div>
-                <div class="kpi-card" id="kpi-checkpoint">
-                  <span class="kpi-label">ACTIVE CHECKPOINT</span>
-                  <span class="kpi-value text-cyan" id="kpi-checkpoint-val">--</span>
-                  <span class="kpi-sub" id="kpi-checkpoint-sub">Sliding window cursor</span>
+                <div class="kpi-card" id="kpi-storage">
+                  <span class="kpi-label">STORAGE &amp; DISK IMPACT</span>
+                  <span class="kpi-value text-yellow" id="kpi-storage-val">-- MB</span>
+                  <span class="kpi-sub" id="kpi-storage-sub">0 temp .slp buffer</span>
                 </div>
-                <div class="kpi-card" id="kpi-lcancel">
-                  <span class="kpi-label">AVG L-CANCEL</span>
-                  <span class="kpi-value text-yellow" id="kpi-lcancel-val">--%</span>
-                  <span class="kpi-sub" id="kpi-lcancel-sub">Melee execution rate</span>
+                <div class="kpi-card" id="kpi-cache-dedup">
+                  <span class="kpi-label">CACHE &amp; DEDUP</span>
+                  <span class="kpi-value text-magenta" id="kpi-dedup-val">--%</span>
+                  <span class="kpi-sub" id="kpi-dedup-sub">Committed vs Skipped</span>
                 </div>
-                <div class="kpi-card" id="kpi-movement">
-                  <span class="kpi-label">AVG WAVEDASHES</span>
-                  <span class="kpi-value text-magenta" id="kpi-wavedash-val">--</span>
-                  <span class="kpi-sub" id="kpi-wavedash-sub">Per match aggregate</span>
+                <div class="kpi-card" id="kpi-integrity">
+                  <span class="kpi-label">PARSE INTEGRITY</span>
+                  <span class="kpi-value text-green" id="kpi-integrity-val">100%</span>
+                  <span class="kpi-sub" id="kpi-integrity-sub">0 corrupt streams</span>
                 </div>
               </div>
 
               <!-- Row 2: Full-Width Ingestion Funnel -->
               <div class="funnel-container">
                 <div class="funnel-header">
-                  <span class="funnel-title">INGESTION PIPELINE FUNNEL</span>
+                  <span class="funnel-title">INGESTION PIPELINE LIFECYCLE</span>
                   <span class="funnel-badge" id="funnel-status-badge">OPTIMAL // ZERO ACCUMULATION</span>
                 </div>
                 <div class="funnel-stages">
@@ -330,10 +465,10 @@
                   <div class="funnel-stage" id="stage-lunar">
                     <div class="stage-icon">🌐</div>
                     <div class="stage-info">
-                      <span class="stage-name">Lunar Melee API</span>
+                      <span class="stage-name">Lunar API</span>
                       <span class="stage-metric" id="stage-lunar-metric">Rate: &le;24/min</span>
                     </div>
-                    <span class="stage-badge status-ok">CONNECTED</span>
+                    <span class="stage-badge status-ok" id="stage-lunar-badge">STANDBY</span>
                   </div>
 
                   <div class="funnel-arrow">➔</div>
@@ -354,10 +489,10 @@
                   <div class="funnel-stage" id="stage-parser">
                     <div class="stage-icon">⚡</div>
                     <div class="stage-info">
-                      <span class="stage-name">SLP Frame Parser</span>
-                      <span class="stage-metric" id="stage-parser-metric">20+ Tech Detectors</span>
+                      <span class="stage-name">Frame Parser</span>
+                      <span class="stage-metric" id="stage-parser-metric">UBJSON Stream</span>
                     </div>
-                    <span class="stage-badge status-ready">ACTIVE</span>
+                    <span class="stage-badge status-ready" id="stage-parser-badge">ACTIVE</span>
                   </div>
 
                   <div class="funnel-arrow">➔</div>
@@ -378,10 +513,10 @@
                   <div class="funnel-stage" id="stage-payload">
                     <div class="stage-icon">📦</div>
                     <div class="stage-info">
-                      <span class="stage-name">Payload Gz</span>
+                      <span class="stage-name">Payload Storage</span>
                       <span class="stage-metric" id="stage-payload-metric">Date-sharded</span>
                     </div>
-                    <span class="stage-badge status-ok">PERSISTED</span>
+                    <span class="stage-badge status-ok" id="stage-payload-badge">PERSISTED</span>
                   </div>
                 </div>
               </div>
@@ -391,16 +526,16 @@
                 <!-- Left Sub-Panel: Pipeline Health & Replay Audit -->
                 <div class="telemetry-card">
                   <div class="card-title-bar">
-                    <span class="card-title">Checkpoint &amp; Replay Audit</span>
+                    <span class="card-title">Batch Execution &amp; Audit</span>
                     <span class="card-status-pill" id="audit-status-pill">ALL SYSTEMS NOMINAL</span>
                   </div>
                   <div class="audit-details-grid">
                     <div class="audit-item">
-                      <span class="audit-label">Active Run ID</span>
+                      <span class="audit-label">Active Run / Batch ID</span>
                       <span class="audit-value text-mono" id="audit-run-name">--</span>
                     </div>
                     <div class="audit-item">
-                      <span class="audit-label">Replays Downloaded</span>
+                      <span class="audit-label">Discovered in Window</span>
                       <span class="audit-value text-mono" id="audit-downloaded">--</span>
                     </div>
                     <div class="audit-item">
@@ -408,8 +543,8 @@
                       <span class="audit-value text-mono text-green" id="audit-processed">--</span>
                     </div>
                     <div class="audit-item">
-                      <span class="audit-label">Corrupt / Failed</span>
-                      <span class="audit-value text-mono text-red" id="audit-failed">0</span>
+                      <span class="audit-label">Deduplicated / Skipped</span>
+                      <span class="audit-value text-mono text-cyan" id="audit-skipped">0</span>
                     </div>
                   </div>
                   <div class="audit-log-box" id="audit-log-box">
@@ -417,54 +552,73 @@
                   </div>
                 </div>
 
-                <!-- Right Sub-Panel: Competitive Mechanical Benchmarks -->
+                <!-- Right Sub-Panel: Storage, Cache & Ingestion Telemetry -->
                 <div class="telemetry-card">
                   <div class="card-title-bar">
-                    <span class="card-title">Competitive Mechanical Benchmarks</span>
-                    <span class="card-status-pill" id="top-chars-pill">Top: Fox, Marth</span>
+                    <span class="card-title">Storage, Cache &amp; Ingestion Telemetry</span>
+                    <span class="card-status-pill text-cyan" id="telemetry-batch-pill">Batch Scope</span>
                   </div>
-                  <div class="benchmarks-list">
-                    <!-- Meter 1: L-Cancel -->
-                    <div class="meter-item">
-                      <div class="meter-header">
-                        <span class="meter-label">L-Cancel Execution</span>
-                        <span class="meter-val text-green" id="meter-lcancel-val">--%</span>
+                  
+                  <div class="telemetry-operational-body">
+                    <!-- Disk Footprint Highlights -->
+                    <div class="storage-footprint-row">
+                      <div class="footprint-stat">
+                        <span class="footprint-label">Payload Storage Files</span>
+                        <span class="footprint-val text-mono" id="telemetry-payload-count">--</span>
                       </div>
-                      <div class="meter-bar-track">
-                        <div class="meter-bar-fill fill-green" id="meter-lcancel-fill" style="width: 0%"></div>
+                      <div class="footprint-stat">
+                        <span class="footprint-label">Total Compressed Size</span>
+                        <span class="footprint-val text-mono text-yellow" id="telemetry-payload-size">-- MB</span>
                       </div>
-                    </div>
-
-                    <!-- Meter 2: Dash Dancing -->
-                    <div class="meter-item">
-                      <div class="meter-header">
-                        <span class="meter-label">Dash Dance Turns / Game</span>
-                        <span class="meter-val text-cyan" id="meter-dash-val">--</span>
-                      </div>
-                      <div class="meter-bar-track">
-                        <div class="meter-bar-fill fill-cyan" id="meter-dash-fill" style="width: 0%"></div>
+                      <div class="footprint-stat">
+                        <span class="footprint-label">Temp .slp Buffer</span>
+                        <span class="footprint-val text-mono text-green" id="telemetry-buffer-status">0 (Purged)</span>
                       </div>
                     </div>
 
-                    <!-- Meter 3: Wavedashes -->
-                    <div class="meter-item">
-                      <div class="meter-header">
-                        <span class="meter-label">Wavedash Landings / Game</span>
-                        <span class="meter-val text-magenta" id="meter-wavedash-val">--</span>
+                    <div class="benchmarks-list">
+                      <!-- Meter 1: Committed Ratio -->
+                      <div class="meter-item">
+                        <div class="meter-header">
+                          <span class="meter-label">Committed Replays</span>
+                          <span class="meter-val text-green" id="meter-committed-val">--%</span>
+                        </div>
+                        <div class="meter-bar-track">
+                          <div class="meter-bar-fill fill-green" id="meter-committed-fill" style="width: 0%"></div>
+                        </div>
                       </div>
-                      <div class="meter-bar-track">
-                        <div class="meter-bar-fill fill-magenta" id="meter-wavedash-fill" style="width: 0%"></div>
-                      </div>
-                    </div>
 
-                    <!-- Meter 4: Inputs Per Minute -->
-                    <div class="meter-item">
-                      <div class="meter-header">
-                        <span class="meter-label">Mean Inputs Per Minute (IPM)</span>
-                        <span class="meter-val text-yellow" id="meter-ipm-val">--</span>
+                      <!-- Meter 2: Deduplication / Skip Ratio -->
+                      <div class="meter-item">
+                        <div class="meter-header">
+                          <span class="meter-label">Deduplication / Cached-Skip</span>
+                          <span class="meter-val text-cyan" id="meter-skipped-val">--%</span>
+                        </div>
+                        <div class="meter-bar-track">
+                          <div class="meter-bar-fill fill-cyan" id="meter-skipped-fill" style="width: 0%"></div>
+                        </div>
                       </div>
-                      <div class="meter-bar-track">
-                        <div class="meter-bar-fill fill-yellow" id="meter-ipm-fill" style="width: 0%"></div>
+
+                      <!-- Meter 3: Parse Failure Rate -->
+                      <div class="meter-item">
+                        <div class="meter-header">
+                          <span class="meter-label">Parse Corruptions / Failures</span>
+                          <span class="meter-val text-red" id="meter-failed-val">0%</span>
+                        </div>
+                        <div class="meter-bar-track">
+                          <div class="meter-bar-fill fill-magenta" id="meter-failed-fill" style="width: 0%"></div>
+                        </div>
+                      </div>
+
+                      <!-- Meter 4: API Rate Limit Consumption -->
+                      <div class="meter-item">
+                        <div class="meter-header">
+                          <span class="meter-label">Lunar API Quota (&le; 24 req/min)</span>
+                          <span class="meter-val text-yellow" id="meter-rate-val">-- / 24 rpm</span>
+                        </div>
+                        <div class="meter-bar-track">
+                          <div class="meter-bar-fill fill-yellow" id="meter-rate-fill" style="width: 0%"></div>
+                        </div>
                       </div>
                     </div>
                   </div>

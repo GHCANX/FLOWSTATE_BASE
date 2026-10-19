@@ -29,6 +29,19 @@ process.on('SIGINT', () => {
   isAborting = true;
 });
 
+function resolveStageId(str) {
+  if (!str) return null;
+  const s = str.toLowerCase().trim();
+  if (s === 'legal') return '31,32,28,8,2,3';
+  if (s === 'battlefield' || s === 'bf') return '31';
+  if (s === 'finaldestination' || s === 'fd') return '32';
+  if (s === 'dreamland' || s === 'dl') return '28';
+  if (s === 'yoshisstory' || s === 'ys') return '8';
+  if (s === 'fountainofdreams' || s === 'fod') return '2';
+  if (s === 'pokemonstadium' || s === 'ps') return '3';
+  return str;
+}
+
 async function main() {
   switch (command) {
     case 'batch': {
@@ -39,7 +52,32 @@ async function main() {
         : parseInt(args.find(a => a.startsWith('--batches='))?.split('=')[1] || '1', 10);
       const runName = args.find(a => a.startsWith('--run='))?.split('=')[1] || 'lunar_2018_onwards';
 
+      // Granular replay filters
+      const startDate = args.find(a => a.startsWith('--start-date='))?.split('=')[1] || null;
+      const endDate = args.find(a => a.startsWith('--end-date='))?.split('=')[1] || null;
+      const connectCode = args.find(a => a.startsWith('--connect-code='))?.split('=')[1]?.toUpperCase() || null;
+      const opponentCode = args.find(a => a.startsWith('--opponent-code='))?.split('=')[1]?.toUpperCase() || null;
+      const rawCharA = args.find(a => a.startsWith('--char-a='))?.split('=')[1] || args.find(a => a.startsWith('--char='))?.split('=')[1] || null;
+      const rawCharB = args.find(a => a.startsWith('--char-b='))?.split('=')[1] || null;
+      const rawStage = args.find(a => a.startsWith('--stage='))?.split('=')[1] || null;
+      const source = args.find(a => a.startsWith('--source='))?.split('=')[1] || null;
+      const minDuration = args.find(a => a.startsWith('--min-duration='))?.split('=')[1] || null;
+
+      const filters = {};
+      if (startDate) filters.startDate = startDate;
+      if (endDate) filters.endDate = endDate;
+      if (connectCode) filters.connectCode = connectCode;
+      if (opponentCode) filters.opponentCode = opponentCode;
+      if (rawCharA) filters.charA = resolveCharacterId(rawCharA) ?? rawCharA;
+      if (rawCharB) filters.charB = resolveCharacterId(rawCharB) ?? rawCharB;
+      if (rawStage) filters.stageId = resolveStageId(rawStage);
+      if (source) filters.source = source;
+      if (minDuration) filters.minDuration = minDuration;
+
       console.log(`\nStarting Sliding-Window Ingestion (Batch size: ${batchSize}, Batches: ${isContinuous ? 'Continuous' : maxBatches}, Run: ${runName})`);
+      if (Object.keys(filters).length > 0) {
+        console.log('Active Filters:', JSON.stringify(filters, null, 2));
+      }
 
       const pipeline = new BatchPipeline({
         lunarClient: lunar,
@@ -54,8 +92,11 @@ async function main() {
         const result = await pipeline.runSingleBatch({
           runName,
           batchSize,
+          filters: Object.keys(filters).length > 0 ? filters : null,
           onProgress: (p) => {
-            if (p.type === 'DOWNLOADING') {
+            if (p.type === 'LIFECYCLE') {
+              console.log(`[Lifecycle] Stage: ${p.stage.toUpperCase()}${p.message ? ` - ${p.message}` : ''}`);
+            } else if (p.type === 'DOWNLOADING') {
               process.stdout.write(`\r[Batch ${b}] Downloading [${p.index}/${p.total}] ${p.replayId}... `);
             } else if (p.type === 'COMMITTED') {
               process.stdout.write(`Processed & Committed to DB.\n`);

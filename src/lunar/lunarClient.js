@@ -82,6 +82,10 @@ export class LunarClient {
     if (params.source) q.append('source', params.source);
     if (params.includeCpu) q.append('includeCpu', 'true');
     if (params.stageId) q.append('stageId', String(params.stageId));
+    if (params.p1ConnectCode) q.append('p1ConnectCode', String(params.p1ConnectCode));
+    if (params.p2ConnectCode) q.append('p2ConnectCode', String(params.p2ConnectCode));
+    if (params.p1CharacterId != null) q.append('p1CharacterId', String(params.p1CharacterId));
+    if (params.p2CharacterId != null) q.append('p2CharacterId', String(params.p2CharacterId));
 
     const url = `${this.baseUrl}/api/replays?${q.toString()}`;
     const res = await this._request(url);

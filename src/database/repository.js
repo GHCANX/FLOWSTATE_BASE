@@ -109,6 +109,39 @@ export class ReplayRepository {
             last_processed_replay_id = ?,
             updated_at = DATETIME('now')
         WHERE id = ?
+      `),
+
+      insertBatchRun: this.db.prepare(`
+        INSERT INTO batch_runs (
+          batch_id, run_name, lifecycle_state, filter_criteria, batch_size, started_at
+        ) VALUES (?, ?, ?, ?, ?, DATETIME('now'))
+      `),
+
+      updateBatchRun: this.db.prepare(`
+        UPDATE batch_runs
+        SET lifecycle_state = ?,
+            discovered_count = ?,
+            downloaded_count = ?,
+            processed_count = ?,
+            skipped_count = ?,
+            failed_count = ?,
+            storage_bytes = ?,
+            throughput_rpm = ?,
+            completed_at = ?,
+            error_message = ?
+        WHERE batch_id = ?
+      `),
+
+      getBatchRuns: this.db.prepare(`
+        SELECT * FROM batch_runs ORDER BY started_at DESC LIMIT ?
+      `),
+
+      getBatchRun: this.db.prepare(`
+        SELECT * FROM batch_runs WHERE batch_id = ?
+      `),
+
+      getLatestBatchRun: this.db.prepare(`
+        SELECT * FROM batch_runs ORDER BY started_at DESC, rowid DESC LIMIT 1
       `)
     };
   }
@@ -283,5 +316,70 @@ export class ReplayRepository {
       lastReplayId,
       checkpointId
     );
+  }
+
+  /**
+   * Create a new operational batch run
+   */
+  createBatchRun({ batchId, runName, filterCriteria = null, batchSize = 100, lifecycleState = 'queued' }) {
+    const filterJson = filterCriteria ? (typeof filterCriteria === 'string' ? filterCriteria : JSON.stringify(filterCriteria)) : null;
+    this.stmts.insertBatchRun.run(batchId, runName, lifecycleState, filterJson, batchSize);
+    return this.getBatchRun(batchId);
+  }
+
+  /**
+   * Update lifecycle and counts for a batch run
+   */
+  updateBatchRun(batchId, updates = {}) {
+    const current = this.getBatchRun(batchId);
+    if (!current) return null;
+
+    const lifecycleState = updates.lifecycleState ?? current.lifecycle_state;
+    const discoveredCount = updates.discoveredCount ?? current.discovered_count;
+    const downloadedCount = updates.downloadedCount ?? current.downloaded_count;
+    const processedCount = updates.processedCount ?? current.processed_count;
+    const skippedCount = updates.skippedCount ?? current.skipped_count;
+    const failedCount = updates.failedCount ?? current.failed_count;
+    const storageBytes = updates.storageBytes ?? current.storage_bytes;
+    const throughputRpm = updates.throughputRpm ?? current.throughput_rpm;
+    const completedAt = updates.completedAt ?? current.completed_at;
+    const errorMessage = updates.errorMessage ?? current.error_message;
+
+    this.stmts.updateBatchRun.run(
+      lifecycleState,
+      discoveredCount,
+      downloadedCount,
+      processedCount,
+      skippedCount,
+      failedCount,
+      storageBytes,
+      throughputRpm,
+      completedAt,
+      errorMessage,
+      batchId
+    );
+
+    return this.getBatchRun(batchId);
+  }
+
+  /**
+   * List recent batch runs
+   */
+  getBatchRuns(limit = 50) {
+    return this.stmts.getBatchRuns.all(limit);
+  }
+
+  /**
+   * Get single batch run by ID
+   */
+  getBatchRun(batchId) {
+    return this.stmts.getBatchRun.get(batchId) || null;
+  }
+
+  /**
+   * Get the most recent batch run
+   */
+  getLatestBatchRun() {
+    return this.stmts.getLatestBatchRun.get() || null;
   }
 }

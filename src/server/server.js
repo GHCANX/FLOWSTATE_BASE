@@ -247,6 +247,103 @@ export function createServer() {
       return;
     }
 
+    if (pathname === '/api/batches' && req.method === 'GET') {
+      try {
+        const db = getDatabase('./analytics.db');
+        const rows = db.prepare(`
+          SELECT * FROM batch_runs ORDER BY started_at DESC LIMIT 50
+        `).all();
+
+        const batches = rows.map(b => ({
+          ...b,
+          filterCriteria: b.filter_criteria ? JSON.parse(b.filter_criteria) : null,
+        }));
+
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(batches));
+      } catch (err) {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: err.message, batches: [] }));
+      }
+      return;
+    }
+
+    if (pathname.startsWith('/api/batches/') && req.method === 'GET') {
+      try {
+        const id = pathname.replace('/api/batches/', '');
+        const db = getDatabase('./analytics.db');
+        let batch;
+
+        if (id === 'latest') {
+          batch = db.prepare(`SELECT * FROM batch_runs ORDER BY started_at DESC, rowid DESC LIMIT 1`).get();
+        } else {
+          batch = db.prepare(`SELECT * FROM batch_runs WHERE batch_id = ?`).get(id);
+        }
+
+        if (!batch) {
+          res.writeHead(404, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Batch not found' }));
+          return;
+        }
+
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({
+          ...batch,
+          filterCriteria: batch.filter_criteria ? JSON.parse(batch.filter_criteria) : null,
+        }));
+      } catch (err) {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: err.message }));
+      }
+      return;
+    }
+
+    if (pathname === '/api/storage/footprint' && req.method === 'GET') {
+      try {
+        const payloadsDir = path.resolve(process.cwd(), 'payloads');
+        let totalPayloads = 0;
+        let totalBytes = 0;
+
+        function scanDir(dir) {
+          if (!fs.existsSync(dir)) return;
+          const entries = fs.readdirSync(dir, { withFileTypes: true });
+          for (const e of entries) {
+            const full = path.join(dir, e.name);
+            if (e.isDirectory()) {
+              scanDir(full);
+            } else if (e.isFile() && e.name.endsWith('.json.gz')) {
+              totalPayloads++;
+              totalBytes += fs.statSync(full).size;
+            }
+          }
+        }
+        scanDir(payloadsDir);
+
+        let tempSlpCount = 0;
+        const tempDir = path.resolve(process.cwd(), 'temp_slp');
+        if (fs.existsSync(tempDir)) {
+          tempSlpCount = fs.readdirSync(tempDir).filter(f => f.endsWith('.slp')).length;
+        }
+
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({
+          payloadStorage: {
+            fileCount: totalPayloads,
+            totalBytes,
+          },
+          totalPayloads,
+          totalBytes,
+          tempSlpCount,
+          tempSlpZero: tempSlpCount === 0,
+          timestamp: new Date().toISOString(),
+        }));
+      } catch (err) {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: err.message }));
+      }
+      return;
+    }
+
     if (pathname === '/api/abort' && req.method === 'POST') {
       if (!activeProcess) {
         res.writeHead(200, { 'Content-Type': 'application/json' });

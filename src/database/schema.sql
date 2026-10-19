@@ -15,6 +15,27 @@ CREATE TABLE IF NOT EXISTS ingestion_progress (
     updated_at TEXT NOT NULL DEFAULT (DATETIME('now'))
 );
 
+-- 1b. Multi-Batch Run Tracker & Lifecycle States
+CREATE TABLE IF NOT EXISTS batch_runs (
+    batch_id TEXT PRIMARY KEY,
+    run_name TEXT NOT NULL,
+    lifecycle_state TEXT NOT NULL,         -- 'queued', 'ingesting', 'parsing', 'storing', 'caching', 'completed', 'failed'
+    filter_criteria TEXT,                  -- JSON string of applied filters
+    batch_size INTEGER NOT NULL DEFAULT 100,
+    discovered_count INTEGER NOT NULL DEFAULT 0,
+    downloaded_count INTEGER NOT NULL DEFAULT 0,
+    processed_count INTEGER NOT NULL DEFAULT 0,
+    skipped_count INTEGER NOT NULL DEFAULT 0,
+    failed_count INTEGER NOT NULL DEFAULT 0,
+    storage_bytes INTEGER NOT NULL DEFAULT 0,
+    throughput_rpm REAL,
+    started_at TEXT NOT NULL DEFAULT (DATETIME('now')),
+    completed_at TEXT,
+    error_message TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_batch_runs_started ON batch_runs(started_at DESC);
+
 -- 2. Audit Log / Per-Replay Status
 CREATE TABLE IF NOT EXISTS replay_status (
     replay_id TEXT PRIMARY KEY,

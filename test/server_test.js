@@ -150,6 +150,25 @@ async function runServerTests() {
     assert(Array.isArray(auditData.recentFailures), 'Audit data contains recentFailures array');
     console.log(`  ✔ Audit Errors API returned statusCounts=${JSON.stringify(auditData.statusCounts)}.`);
 
+    // 12. Test API Batch Runs
+    console.log('12. Testing GET /api/batches...');
+    const batchesRes = await fetchHttp(`${baseUrl}/api/batches`);
+    assert.strictEqual(batchesRes.status, 200);
+    const batchesData = JSON.parse(batchesRes.body);
+    assert(Array.isArray(batchesData), 'Batches data must be an array');
+    console.log(`  ✔ Batches API returned ${batchesData.length} recorded batch runs.`);
+
+    // 13. Test API Storage Footprint
+    console.log('13. Testing GET /api/storage/footprint...');
+    const footprintRes = await fetchHttp(`${baseUrl}/api/storage/footprint`);
+    assert.strictEqual(footprintRes.status, 200);
+    const footprintData = JSON.parse(footprintRes.body);
+    assert('tempSlpCount' in footprintData, 'Storage footprint contains tempSlpCount');
+    assert('tempSlpZero' in footprintData, 'Storage footprint contains tempSlpZero');
+    assert('payloadStorage' in footprintData, 'Storage footprint contains payloadStorage');
+    assert.strictEqual(footprintData.tempSlpZero, true, 'Zero accumulation rule: tempSlpZero must be true');
+    console.log(`  ✔ Storage Footprint API returned payloadFiles=${footprintData.payloadStorage.fileCount}, tempSlpZero=${footprintData.tempSlpZero}.`);
+
     console.log('\n=== ALL BROWSER FRONTEND TESTS PASSED ===');
   } finally {
     server.close();
