@@ -307,4 +307,332 @@ export class AnalyticsService {
 
     return JSON.stringify(games, null, 2);
   }
+
+  /**
+   * Retrieves per-player habit breakdowns and event timelines for a game
+   * @param {string} gameId 
+   * @param {Object} [options]
+   * @param {number} [options.playerIndex]
+   * @param {number} [options.port]
+   */
+  getGameHabits(gameId, options = {}) {
+    const game = this.db.prepare('SELECT * FROM games WHERE game_id = ?').get(gameId);
+    if (!game) return null;
+
+    let deepPayload = null;
+    if (game.payload_path) {
+      try {
+        deepPayload = this.payloadBuilder.loadPayload(game.payload_path);
+      } catch (err) {
+        // payload file might not exist in mocked tests or uncompressed runs
+      }
+    }
+
+    let query = `
+      SELECT phs.*, gp.port, gp.connect_code as player_connect_code, gp.character_id as player_character_id
+      FROM player_habits_stats phs
+      LEFT JOIN game_players gp ON phs.game_id = gp.game_id AND phs.player_index = gp.player_index
+      WHERE phs.game_id = ?
+    `;
+    const params = [gameId];
+
+    if (options.playerIndex !== undefined && options.playerIndex !== null) {
+      query += ' AND phs.player_index = ?';
+      params.push(Number(options.playerIndex));
+    } else if (options.port !== undefined && options.port !== null) {
+      query += ' AND gp.port = ?';
+      params.push(Number(options.port));
+    }
+
+    query += ' ORDER BY phs.player_index ASC';
+
+    const rows = this.db.prepare(query).all(...params);
+    const habitsData = deepPayload?.habits || {};
+
+    const players = rows.map(row => {
+      const pIdx = row.player_index;
+      const events = {
+        getupEvents: (habitsData.getupEvents || []).filter(e => e.playerIndex === pIdx),
+        grabTriggers: (habitsData.grabTriggers || []).filter(e => e.playerIndex === pIdx),
+        transitionDecisions: (habitsData.transitionDecisions || []).filter(e => e.playerIndex === pIdx),
+        escapeSequences: (habitsData.escapeSequences || []).filter(e => e.playerIndex === pIdx),
+      };
+
+      const stats = {
+        climb_count: row.climb_count,
+        climb_punished: row.climb_punished,
+        attack_count: row.attack_count,
+        attack_punished: row.attack_punished,
+        roll_count: row.roll_count,
+        roll_punished: row.roll_punished,
+        jump_count: row.jump_count,
+        jump_punished: row.jump_punished,
+        ledgedash_count: row.ledgedash_count,
+        ledgedash_punished: row.ledgedash_punished,
+        tech_neutral_count: row.tech_neutral_count,
+        tech_neutral_punished: row.tech_neutral_punished,
+        tech_forward_count: row.tech_forward_count,
+        tech_forward_punished: row.tech_forward_punished,
+        tech_back_count: row.tech_back_count,
+        tech_back_punished: row.tech_back_punished,
+        tech_miss_count: row.tech_miss_count,
+        tech_miss_punished: row.tech_miss_punished,
+        wakeup_stand_count: row.wakeup_stand_count,
+        wakeup_stand_punished: row.wakeup_stand_punished,
+        wakeup_forward_count: row.wakeup_forward_count,
+        wakeup_forward_punished: row.wakeup_forward_punished,
+        wakeup_back_count: row.wakeup_back_count,
+        wakeup_back_punished: row.wakeup_back_punished,
+        wakeup_attack_count: row.wakeup_attack_count,
+        wakeup_attack_punished: row.wakeup_attack_punished,
+        grabs_shield_pressure: row.grabs_shield_pressure,
+        grabs_scramble: row.grabs_scramble,
+        grabs_neutral: row.grabs_neutral,
+        neutral_resets: row.neutral_resets,
+        over_extensions: row.over_extensions,
+        oos_roll_count: row.oos_roll_count,
+        oos_roll_punished: row.oos_roll_punished,
+        oos_spotdodge_count: row.oos_spotdodge_count,
+        oos_spotdodge_punished: row.oos_spotdodge_punished,
+        oos_grab_count: row.oos_grab_count,
+        oos_grab_punished: row.oos_grab_punished,
+        oos_aerial_count: row.oos_aerial_count,
+        oos_aerial_punished: row.oos_aerial_punished,
+        corner_drift_count: row.corner_drift_count,
+      };
+
+      return {
+        playerIndex: row.player_index,
+        port: row.port,
+        connectCode: row.connect_code || row.player_connect_code,
+        characterId: row.character_id || row.player_character_id,
+        isComplete: Boolean(row.is_complete),
+        stats,
+        events,
+        ...row,
+      };
+    });
+
+    return {
+      gameId: game.game_id,
+      isComplete: rows.length > 0 ? Boolean(rows[0].is_complete) : true,
+      players,
+    };
+  }
+
+  /**
+   * Computes rolling aggregate habit frequencies and punish percentages for a player
+   * @param {string} connectCode 
+   * @param {Object} [filters]
+   * @param {string} [filters.opponentConnectCode]
+   * @param {number} [filters.characterId]
+   * @param {number} [filters.opponentCharacterId]
+   * @param {number} [filters.stageId]
+   */
+  getPlayerHabitsProfile(connectCode, filters = {}) {
+    let query = `
+      SELECT 
+        phs.connect_code,
+        COUNT(DISTINCT phs.game_id) as total_games,
+        
+        -- Ledge Options
+        SUM(phs.climb_count) as climb_count,
+        SUM(phs.climb_punished) as climb_punished,
+        SUM(phs.climb_punished) * 1.0 / NULLIF(SUM(phs.climb_count), 0) as climb_punish_rate,
+
+        SUM(phs.attack_count) as attack_count,
+        SUM(phs.attack_punished) as attack_punished,
+        SUM(phs.attack_punished) * 1.0 / NULLIF(SUM(phs.attack_count), 0) as attack_punish_rate,
+
+        SUM(phs.roll_count) as roll_count,
+        SUM(phs.roll_punished) as roll_punished,
+        SUM(phs.roll_punished) * 1.0 / NULLIF(SUM(phs.roll_count), 0) as roll_punish_rate,
+
+        SUM(phs.jump_count) as jump_count,
+        SUM(phs.jump_punished) as jump_punished,
+        SUM(phs.jump_punished) * 1.0 / NULLIF(SUM(phs.jump_count), 0) as jump_punish_rate,
+
+        SUM(phs.ledgedash_count) as ledgedash_count,
+        SUM(phs.ledgedash_punished) as ledgedash_punished,
+        SUM(phs.ledgedash_punished) * 1.0 / NULLIF(SUM(phs.ledgedash_count), 0) as ledgedash_punish_rate,
+
+        -- Ground Tech Options
+        SUM(phs.tech_neutral_count) as tech_neutral_count,
+        SUM(phs.tech_neutral_punished) as tech_neutral_punished,
+        SUM(phs.tech_neutral_punished) * 1.0 / NULLIF(SUM(phs.tech_neutral_count), 0) as tech_neutral_punish_rate,
+
+        SUM(phs.tech_forward_count) as tech_forward_count,
+        SUM(phs.tech_forward_punished) as tech_forward_punished,
+        SUM(phs.tech_forward_punished) * 1.0 / NULLIF(SUM(phs.tech_forward_count), 0) as tech_forward_punish_rate,
+
+        SUM(phs.tech_back_count) as tech_back_count,
+        SUM(phs.tech_back_punished) as tech_back_punished,
+        SUM(phs.tech_back_punished) * 1.0 / NULLIF(SUM(phs.tech_back_count), 0) as tech_back_punish_rate,
+
+        SUM(phs.tech_miss_count) as tech_miss_count,
+        SUM(phs.tech_miss_punished) as tech_miss_punished,
+        SUM(phs.tech_miss_punished) * 1.0 / NULLIF(SUM(phs.tech_miss_count), 0) as tech_miss_punish_rate,
+
+        -- Missed-Tech Wakeup Options
+        SUM(phs.wakeup_stand_count) as wakeup_stand_count,
+        SUM(phs.wakeup_stand_punished) as wakeup_stand_punished,
+        SUM(phs.wakeup_stand_punished) * 1.0 / NULLIF(SUM(phs.wakeup_stand_count), 0) as wakeup_stand_punish_rate,
+
+        SUM(phs.wakeup_forward_count) as wakeup_forward_count,
+        SUM(phs.wakeup_forward_punished) as wakeup_forward_punished,
+        SUM(phs.wakeup_forward_punished) * 1.0 / NULLIF(SUM(phs.wakeup_forward_count), 0) as wakeup_forward_punish_rate,
+
+        SUM(phs.wakeup_back_count) as wakeup_back_count,
+        SUM(phs.wakeup_back_punished) as wakeup_back_punished,
+        SUM(phs.wakeup_back_punished) * 1.0 / NULLIF(SUM(phs.wakeup_back_count), 0) as wakeup_back_punish_rate,
+
+        SUM(phs.wakeup_attack_count) as wakeup_attack_count,
+        SUM(phs.wakeup_attack_punished) as wakeup_attack_punished,
+        SUM(phs.wakeup_attack_punished) * 1.0 / NULLIF(SUM(phs.wakeup_attack_count), 0) as wakeup_attack_punish_rate,
+
+        -- Grab Triggers
+        SUM(phs.grabs_shield_pressure) as grabs_shield_pressure,
+        SUM(phs.grabs_scramble) as grabs_scramble,
+        SUM(phs.grabs_neutral) as grabs_neutral,
+
+        -- Transitions
+        SUM(phs.neutral_resets) as neutral_resets,
+        SUM(phs.over_extensions) as over_extensions,
+
+        -- Out of Shield Choices
+        SUM(phs.oos_roll_count) as oos_roll_count,
+        SUM(phs.oos_roll_punished) as oos_roll_punished,
+        SUM(phs.oos_roll_punished) * 1.0 / NULLIF(SUM(phs.oos_roll_count), 0) as oos_roll_punish_rate,
+
+        SUM(phs.oos_spotdodge_count) as oos_spotdodge_count,
+        SUM(phs.oos_spotdodge_punished) as oos_spotdodge_punished,
+        SUM(phs.oos_spotdodge_punished) * 1.0 / NULLIF(SUM(phs.oos_spotdodge_count), 0) as oos_spotdodge_punish_rate,
+
+        SUM(phs.oos_grab_count) as oos_grab_count,
+        SUM(phs.oos_grab_punished) as oos_grab_punished,
+        SUM(phs.oos_grab_punished) * 1.0 / NULLIF(SUM(phs.oos_grab_count), 0) as oos_grab_punish_rate,
+
+        SUM(phs.oos_aerial_count) as oos_aerial_count,
+        SUM(phs.oos_aerial_punished) as oos_aerial_punished,
+        SUM(phs.oos_aerial_punished) * 1.0 / NULLIF(SUM(phs.oos_aerial_count), 0) as oos_aerial_punish_rate,
+
+        SUM(phs.corner_drift_count) as corner_drift_count
+
+      FROM player_habits_stats phs
+      JOIN games g ON phs.game_id = g.game_id
+      JOIN game_players p ON phs.game_id = p.game_id AND phs.player_index = p.player_index
+      LEFT JOIN game_players opp ON phs.game_id = opp.game_id AND opp.player_index != phs.player_index
+      WHERE phs.connect_code = ?
+        AND phs.is_complete = 1
+    `;
+
+    const params = [connectCode];
+
+    if (filters.opponentConnectCode) {
+      query += ' AND opp.connect_code = ?';
+      params.push(filters.opponentConnectCode);
+    }
+    if (filters.characterId != null) {
+      query += ' AND p.character_id = ?';
+      params.push(Number(filters.characterId));
+    }
+    if (filters.opponentCharacterId != null) {
+      query += ' AND opp.character_id = ?';
+      params.push(Number(filters.opponentCharacterId));
+    }
+    if (filters.stageId != null) {
+      query += ' AND g.stage_id = ?';
+      params.push(Number(filters.stageId));
+    }
+
+    query += ' GROUP BY phs.connect_code';
+
+    const row = this.db.prepare(query).get(...params);
+    const gamesAnalyzed = row?.total_games ?? 0;
+
+    const totals = {
+      climb_count: row?.climb_count ?? 0,
+      climb_punished: row?.climb_punished ?? 0,
+      attack_count: row?.attack_count ?? 0,
+      attack_punished: row?.attack_punished ?? 0,
+      roll_count: row?.roll_count ?? 0,
+      roll_punished: row?.roll_punished ?? 0,
+      jump_count: row?.jump_count ?? 0,
+      jump_punished: row?.jump_punished ?? 0,
+      ledgedash_count: row?.ledgedash_count ?? 0,
+      ledgedash_punished: row?.ledgedash_punished ?? 0,
+      tech_neutral_count: row?.tech_neutral_count ?? 0,
+      tech_neutral_punished: row?.tech_neutral_punished ?? 0,
+      tech_forward_count: row?.tech_forward_count ?? 0,
+      tech_forward_punished: row?.tech_forward_punished ?? 0,
+      tech_back_count: row?.tech_back_count ?? 0,
+      tech_back_punished: row?.tech_back_punished ?? 0,
+      tech_miss_count: row?.tech_miss_count ?? 0,
+      tech_miss_punished: row?.tech_miss_punished ?? 0,
+      wakeup_stand_count: row?.wakeup_stand_count ?? 0,
+      wakeup_stand_punished: row?.wakeup_stand_punished ?? 0,
+      wakeup_forward_count: row?.wakeup_forward_count ?? 0,
+      wakeup_forward_punished: row?.wakeup_forward_punished ?? 0,
+      wakeup_back_count: row?.wakeup_back_count ?? 0,
+      wakeup_back_punished: row?.wakeup_back_punished ?? 0,
+      wakeup_attack_count: row?.wakeup_attack_count ?? 0,
+      wakeup_attack_punished: row?.wakeup_attack_punished ?? 0,
+      grabs_shield_pressure: row?.grabs_shield_pressure ?? 0,
+      grabs_scramble: row?.grabs_scramble ?? 0,
+      grabs_neutral: row?.grabs_neutral ?? 0,
+      neutral_resets: row?.neutral_resets ?? 0,
+      over_extensions: row?.over_extensions ?? 0,
+      oos_roll_count: row?.oos_roll_count ?? 0,
+      oos_roll_punished: row?.oos_roll_punished ?? 0,
+      oos_spotdodge_count: row?.oos_spotdodge_count ?? 0,
+      oos_spotdodge_punished: row?.oos_spotdodge_punished ?? 0,
+      oos_grab_count: row?.oos_grab_count ?? 0,
+      oos_grab_punished: row?.oos_grab_punished ?? 0,
+      oos_aerial_count: row?.oos_aerial_count ?? 0,
+      oos_aerial_punished: row?.oos_aerial_punished ?? 0,
+      corner_drift_count: row?.corner_drift_count ?? 0,
+    };
+
+    const rates = {
+      climb_punish_rate: row?.climb_punish_rate ?? null,
+      attack_punish_rate: row?.attack_punish_rate ?? null,
+      roll_punish_rate: row?.roll_punish_rate ?? null,
+      jump_punish_rate: row?.jump_punish_rate ?? null,
+      ledgedash_punish_rate: row?.ledgedash_punish_rate ?? null,
+      tech_neutral_punish_rate: row?.tech_neutral_punish_rate ?? null,
+      tech_forward_punish_rate: row?.tech_forward_punish_rate ?? null,
+      tech_back_punish_rate: row?.tech_back_punish_rate ?? null,
+      tech_miss_punish_rate: row?.tech_miss_punish_rate ?? null,
+      wakeup_stand_punish_rate: row?.wakeup_stand_punish_rate ?? null,
+      wakeup_forward_punish_rate: row?.wakeup_forward_punish_rate ?? null,
+      wakeup_back_punish_rate: row?.wakeup_back_punish_rate ?? null,
+      wakeup_attack_punish_rate: row?.wakeup_attack_punish_rate ?? null,
+      oos_roll_punish_rate: row?.oos_roll_punish_rate ?? null,
+      oos_spotdodge_punish_rate: row?.oos_spotdodge_punish_rate ?? null,
+      oos_grab_punish_rate: row?.oos_grab_punish_rate ?? null,
+      oos_aerial_punish_rate: row?.oos_aerial_punish_rate ?? null,
+    };
+
+    return {
+      connectCode,
+      totalGames: gamesAnalyzed,
+      gamesAnalyzed,
+      total_games: gamesAnalyzed,
+      total_climbs: totals.climb_count,
+      total_climb_punished: totals.climb_punished,
+      total_tech_neutral: totals.tech_neutral_count,
+      total_grabs_shield_pressure: totals.grabs_shield_pressure,
+      totals,
+      rates,
+      ...(row || {}),
+    };
+  }
+
+  /**
+   * Alias for getPlayerHabitsProfile for backward and test compatibility
+   */
+  getPlayerHabits(connectCode, filters = {}) {
+    return this.getPlayerHabitsProfile(connectCode, filters);
+  }
 }
+

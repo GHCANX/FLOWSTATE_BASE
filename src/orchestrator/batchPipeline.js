@@ -257,6 +257,8 @@ export class BatchPipeline {
           replayId,
           error: err.message,
         });
+      } finally {
+        FileCleaner.deleteFile(tempSlpPath);
       }
     }
 

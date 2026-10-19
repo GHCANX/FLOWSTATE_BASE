@@ -89,6 +89,15 @@ export class FrameConsumer {
     const mechanicsMetrics = mechDetector.fetch();
     const tacticalMetrics = tactDetector.fetch();
 
+    // Collect habit payload
+    const habitPayload = tactDetector.getHabitPayload();
+
+    // Determine match completion
+    const endMethod = gameEnd?.gameEndMethod ?? null;
+    const lrasPort = gameEnd?.lrasInitiatorIndex ?? null;
+    const hasLras = lrasPort !== null && lrasPort !== -1 && lrasPort !== undefined;
+    const isComplete = (durationFrames >= 1800) && (endMethod !== 7) && !hasLras;
+
     // Compile granular deep payload for .json.gz
     const deepPayload = {
       gameId,
@@ -108,6 +117,7 @@ export class FrameConsumer {
       pressureEvents: tacticalMetrics.pressureEvents,
       phantomHits: tacticalMetrics.phantomHits,
       mechanicsSummary: mechanicsMetrics,
+      habits: habitPayload,
     };
 
     // Save compressed payload
@@ -126,8 +136,8 @@ export class FrameConsumer {
       gameMode: settings.gameMode ?? 2,
       isTeams: settings.isTeams ?? false,
       winnerPort: stats.overall ? (stats.overall.find(o => o.killCount >= 4)?.playerIndex ?? null) : null,
-      endMethod: gameEnd?.gameEndMethod ?? null,
-      lrasPort: gameEnd?.lrasInitiatorIndex ?? null,
+      endMethod,
+      lrasPort,
       payloadPath,
       source: metaOverrides.source || 'local',
     };
@@ -169,13 +179,27 @@ export class FrameConsumer {
       };
     });
 
+    // Habits records for SQLite
+    const habitsRecords = settings.players.map(p => {
+      const hStats = tactDetector.getHabitStats(p.playerIndex);
+      return {
+        gameId,
+        playerIndex: p.playerIndex,
+        connectCode: p.connectCode || null,
+        characterId: p.characterId,
+        isComplete: isComplete ? 1 : 0,
+        ...hStats,
+      };
+    });
+
     // Save to SQLite
     if (this.repository) {
       this.repository.saveProcessedGame(
         gameRecord,
         playersRecords,
         overallRecords,
-        mechanicsMetrics
+        mechanicsMetrics,
+        habitsRecords
       );
     }
 

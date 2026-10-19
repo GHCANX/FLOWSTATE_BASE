@@ -6,6 +6,7 @@ import { spawn } from 'node:child_process';
 import { CHARACTER_NAMES } from '../constants/characters.js';
 import { getDatabase, closeDatabase } from '../database/db.js';
 import { getStageName } from '../constants/stageGeometry.js';
+import { AnalyticsService } from '../query/analyticsService.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -240,6 +241,66 @@ export function createServer() {
           statusCounts,
           recentFailures,
         }));
+      } catch (err) {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: err.message }));
+      }
+      return;
+    }
+
+    const gameHabitsMatch = pathname.match(/^\/api\/games\/([^/]+)\/habits$/);
+    if (gameHabitsMatch && req.method === 'GET') {
+      try {
+        const gameId = gameHabitsMatch[1];
+        const playerIndexParam = urlObj.searchParams.get('playerIndex');
+        const portParam = urlObj.searchParams.get('port');
+        const options = {};
+        if (playerIndexParam !== null) options.playerIndex = parseInt(playerIndexParam, 10);
+        if (portParam !== null) options.port = parseInt(portParam, 10);
+
+        const analytics = new AnalyticsService('./analytics.db');
+        const habits = analytics.getGameHabits(gameId, options);
+
+        if (!habits) {
+          res.writeHead(404, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Game not found' }));
+          return;
+        }
+
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(habits));
+      } catch (err) {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: err.message }));
+      }
+      return;
+    }
+
+    const playerHabitsMatch = pathname.match(/^\/api\/players\/([^/]+)\/habits$/);
+    if (playerHabitsMatch && req.method === 'GET') {
+      try {
+        const rawCode = playerHabitsMatch[1];
+        const connectCode = decodeURIComponent(rawCode).trim().toUpperCase();
+
+        const filters = {};
+        if (urlObj.searchParams.get('opponentConnectCode')) {
+          filters.opponentConnectCode = decodeURIComponent(urlObj.searchParams.get('opponentConnectCode')).trim().toUpperCase();
+        }
+        if (urlObj.searchParams.get('characterId') !== null) {
+          filters.characterId = parseInt(urlObj.searchParams.get('characterId'), 10);
+        }
+        if (urlObj.searchParams.get('opponentCharacterId') !== null) {
+          filters.opponentCharacterId = parseInt(urlObj.searchParams.get('opponentCharacterId'), 10);
+        }
+        if (urlObj.searchParams.get('stageId') !== null) {
+          filters.stageId = parseInt(urlObj.searchParams.get('stageId'), 10);
+        }
+
+        const analytics = new AnalyticsService('./analytics.db');
+        const profile = analytics.getPlayerHabitsProfile(connectCode, filters);
+
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(profile));
       } catch (err) {
         res.writeHead(500, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ error: err.message }));

@@ -61,6 +61,18 @@ export const ACTION_STATES = {
   WALL_TECH_JUMP: 0xCB,
   MISSED_WALL_TECH: 0xF7,
 
+  // Missed-Tech Wakeup States
+  DOWN_WAIT_U: 0xB8,
+  DOWN_WAIT_D: 0xC0,
+  DOWN_STAND_U: 0xB9,
+  DOWN_STAND_D: 0xC1,
+  DOWN_FORWARD_U: 0xBA,
+  DOWN_FORWARD_D: 0xC2,
+  DOWN_BACK_U: 0xBB,
+  DOWN_BACK_D: 0xC3,
+  DOWN_ATTACK_U: 0xBC,
+  DOWN_ATTACK_D: 0xC4,
+
   // Ledge
   CLIFF_CATCH: 0xFC,
   CLIFF_WAIT: 0xFD,
@@ -101,10 +113,32 @@ export function isLedge(state) {
   return state >= ACTION_STATES.CLIFF_CATCH && state <= ACTION_STATES.CLIFF_JUMP_QUICK;
 }
 
+export function isStandardLedgeOption(state) {
+  return state >= ACTION_STATES.CLIFF_CLIMB_SLOW && state <= ACTION_STATES.CLIFF_JUMP_QUICK;
+}
+
+export function isCliffOption(state) {
+  return state >= ACTION_STATES.CLIFF_CLIMB_SLOW && state <= ACTION_STATES.CLIFF_JUMP_QUICK;
+}
+
 export function isTech(state) {
   return state >= ACTION_STATES.TECH_NEUTRAL && state <= ACTION_STATES.WALL_TECH_JUMP;
+}
+
+export function isDownWait(state) {
+  return state === ACTION_STATES.DOWN_WAIT_U || state === ACTION_STATES.DOWN_WAIT_D;
+}
+
+export function isWakeup(state) {
+  return (state >= ACTION_STATES.DOWN_STAND_U && state <= ACTION_STATES.DOWN_ATTACK_U) ||
+         (state >= ACTION_STATES.DOWN_STAND_D && state <= ACTION_STATES.DOWN_ATTACK_D);
+}
+
+export function isAttack(state) {
+  return (state >= 0x2C && state <= 0x45) || state >= 341;
 }
 
 export function isShine(state) {
   return state >= ACTION_STATES.SHINE_START && state <= ACTION_STATES.SHINE_END;
 }
+

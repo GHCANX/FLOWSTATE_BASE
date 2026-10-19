@@ -88,6 +88,94 @@ export class ReplayRepository {
           wavedash_count = excluded.wavedash_count
       `),
 
+      insertHabits: this.db.prepare(`
+        INSERT INTO player_habits_stats (
+          game_id, player_index, connect_code, character_id, is_complete,
+          climb_count, climb_punished, attack_count, attack_punished,
+          roll_count, roll_punished, jump_count, jump_punished,
+          ledgedash_count, ledgedash_punished,
+          tech_neutral_count, tech_neutral_punished,
+          tech_forward_count, tech_forward_punished,
+          tech_back_count, tech_back_punished,
+          tech_miss_count, tech_miss_punished,
+          wakeup_stand_count, wakeup_stand_punished,
+          wakeup_forward_count, wakeup_forward_punished,
+          wakeup_back_count, wakeup_back_punished,
+          wakeup_attack_count, wakeup_attack_punished,
+          grabs_shield_pressure, grabs_scramble, grabs_neutral,
+          neutral_resets, over_extensions,
+          oos_roll_count, oos_roll_punished,
+          oos_spotdodge_count, oos_spotdodge_punished,
+          oos_grab_count, oos_grab_punished,
+          oos_aerial_count, oos_aerial_punished,
+          corner_drift_count
+        ) VALUES (
+          ?, ?, ?, ?, ?,
+          ?, ?, ?, ?,
+          ?, ?, ?, ?,
+          ?, ?,
+          ?, ?,
+          ?, ?,
+          ?, ?,
+          ?, ?,
+          ?, ?,
+          ?, ?,
+          ?, ?,
+          ?, ?,
+          ?, ?, ?,
+          ?, ?,
+          ?, ?,
+          ?, ?,
+          ?, ?,
+          ?, ?,
+          ?
+        )
+        ON CONFLICT(game_id, player_index) DO UPDATE SET
+          connect_code = excluded.connect_code,
+          character_id = excluded.character_id,
+          is_complete = excluded.is_complete,
+          climb_count = excluded.climb_count,
+          climb_punished = excluded.climb_punished,
+          attack_count = excluded.attack_count,
+          attack_punished = excluded.attack_punished,
+          roll_count = excluded.roll_count,
+          roll_punished = excluded.roll_punished,
+          jump_count = excluded.jump_count,
+          jump_punished = excluded.jump_punished,
+          ledgedash_count = excluded.ledgedash_count,
+          ledgedash_punished = excluded.ledgedash_punished,
+          tech_neutral_count = excluded.tech_neutral_count,
+          tech_neutral_punished = excluded.tech_neutral_punished,
+          tech_forward_count = excluded.tech_forward_count,
+          tech_forward_punished = excluded.tech_forward_punished,
+          tech_back_count = excluded.tech_back_count,
+          tech_back_punished = excluded.tech_back_punished,
+          tech_miss_count = excluded.tech_miss_count,
+          tech_miss_punished = excluded.tech_miss_punished,
+          wakeup_stand_count = excluded.wakeup_stand_count,
+          wakeup_stand_punished = excluded.wakeup_stand_punished,
+          wakeup_forward_count = excluded.wakeup_forward_count,
+          wakeup_forward_punished = excluded.wakeup_forward_punished,
+          wakeup_back_count = excluded.wakeup_back_count,
+          wakeup_back_punished = excluded.wakeup_back_punished,
+          wakeup_attack_count = excluded.wakeup_attack_count,
+          wakeup_attack_punished = excluded.wakeup_attack_punished,
+          grabs_shield_pressure = excluded.grabs_shield_pressure,
+          grabs_scramble = excluded.grabs_scramble,
+          grabs_neutral = excluded.grabs_neutral,
+          neutral_resets = excluded.neutral_resets,
+          over_extensions = excluded.over_extensions,
+          oos_roll_count = excluded.oos_roll_count,
+          oos_roll_punished = excluded.oos_roll_punished,
+          oos_spotdodge_count = excluded.oos_spotdodge_count,
+          oos_spotdodge_punished = excluded.oos_spotdodge_punished,
+          oos_grab_count = excluded.oos_grab_count,
+          oos_grab_punished = excluded.oos_grab_punished,
+          oos_aerial_count = excluded.oos_aerial_count,
+          oos_aerial_punished = excluded.oos_aerial_punished,
+          corner_drift_count = excluded.corner_drift_count
+      `),
+
       getCheckpoint: this.db.prepare(`
         SELECT * FROM ingestion_progress WHERE run_name = ? ORDER BY id DESC LIMIT 1
       `),
@@ -164,7 +252,7 @@ export class ReplayRepository {
   /**
    * Insert a full parsed replay inside an atomic transaction
    */
-  saveProcessedGame(game, players, overallStats, mechanicsStats) {
+  saveProcessedGame(game, players, overallStats, mechanicsStats, habitsStats = []) {
     // Execute inside immediate transaction
     this.db.exec('BEGIN IMMEDIATE;');
     try {
@@ -262,6 +350,58 @@ export class ReplayRepository {
           m.boostGrabs,
           m.multishines
         );
+      }
+
+      if (habitsStats && habitsStats.length > 0) {
+        for (const h of habitsStats) {
+          this.stmts.insertHabits.run(
+            game.gameId,
+            h.playerIndex,
+            h.connectCode ?? null,
+            h.characterId,
+            (h.is_complete !== undefined ? h.is_complete : (h.isComplete !== undefined ? h.isComplete : 1)) ? 1 : 0,
+            h.climb_count ?? h.climbCount ?? 0,
+            h.climb_punished ?? h.climbPunished ?? 0,
+            h.attack_count ?? h.attackCount ?? 0,
+            h.attack_punished ?? h.attackPunished ?? 0,
+            h.roll_count ?? h.rollCount ?? 0,
+            h.roll_punished ?? h.rollPunished ?? 0,
+            h.jump_count ?? h.jumpCount ?? 0,
+            h.jump_punished ?? h.jumpPunished ?? 0,
+            h.ledgedash_count ?? h.ledgedashCount ?? 0,
+            h.ledgedash_punished ?? h.ledgedashPunished ?? 0,
+            h.tech_neutral_count ?? h.techNeutralCount ?? 0,
+            h.tech_neutral_punished ?? h.techNeutralPunished ?? 0,
+            h.tech_forward_count ?? h.techForwardCount ?? 0,
+            h.tech_forward_punished ?? h.techForwardPunished ?? 0,
+            h.tech_back_count ?? h.techBackCount ?? 0,
+            h.tech_back_punished ?? h.techBackPunished ?? 0,
+            h.tech_miss_count ?? h.techMissCount ?? 0,
+            h.tech_miss_punished ?? h.techMissPunished ?? 0,
+            h.wakeup_stand_count ?? h.wakeupStandCount ?? 0,
+            h.wakeup_stand_punished ?? h.wakeupStandPunished ?? 0,
+            h.wakeup_forward_count ?? h.wakeupForwardCount ?? 0,
+            h.wakeup_forward_punished ?? h.wakeupForwardPunished ?? 0,
+            h.wakeup_back_count ?? h.wakeupBackCount ?? 0,
+            h.wakeup_back_punished ?? h.wakeupBackPunished ?? 0,
+            h.wakeup_attack_count ?? h.wakeupAttackCount ?? 0,
+            h.wakeup_attack_punished ?? h.wakeupAttackPunished ?? 0,
+            h.grabs_shield_pressure ?? h.grabsShieldPressure ?? 0,
+            h.grabs_scramble ?? h.grabsScramble ?? 0,
+            h.grabs_neutral ?? h.grabsNeutral ?? 0,
+            h.neutral_resets ?? h.neutralResets ?? 0,
+            h.over_extensions ?? h.overExtensions ?? 0,
+            h.oos_roll_count ?? h.oosRollCount ?? 0,
+            h.oos_roll_punished ?? h.oosRollPunished ?? 0,
+            h.oos_spotdodge_count ?? h.oosSpotdodgeCount ?? 0,
+            h.oos_spotdodge_punished ?? h.oosSpotdodgePunished ?? 0,
+            h.oos_grab_count ?? h.oosGrabCount ?? 0,
+            h.oos_grab_punished ?? h.oosGrabPunished ?? 0,
+            h.oos_aerial_count ?? h.oosAerialCount ?? 0,
+            h.oos_aerial_punished ?? h.oosAerialPunished ?? 0,
+            h.corner_drift_count ?? h.cornerDriftCount ?? 0
+          );
+        }
       }
 
       this.stmts.recordStatus.run(

@@ -168,6 +168,9 @@ export class MechanicsDetector {
       if (anim === ACTION_STATES.CLIFF_CATCH && isNewAnim) {
         m.ledgeGrabs++;
       }
+      if (anim === ACTION_STATES.CLIFF_CATCH || isDamage(anim)) {
+        st.lastLedgeWaitFrame = -999;
+      }
       if (anim === ACTION_STATES.CLIFF_WAIT) {
         st.lastLedgeWaitFrame = frame.frame;
       }
@@ -203,9 +206,7 @@ export class MechanicsDetector {
       if (prevAnim && isShield(prevAnim) && !isShield(anim)) {
         if (anim === ACTION_STATES.GRAB) m.oosGrabs++;
         else if (anim === ACTION_STATES.ATTACK_USMASH) m.oosSmashes++;
-        else if (anim >= ACTION_STATES.AERIAL_LANDING_START && anim <= ACTION_STATES.AERIAL_LANDING_END) m.oosAerials++;
-        else if (anim === ACTION_STATES.KNEE_BEND) {
-          // Track jumpsquat OOS
+        else if ((anim >= 0x41 && anim <= 0x45) || anim === ACTION_STATES.KNEE_BEND || (anim >= ACTION_STATES.AERIAL_LANDING_START && anim <= ACTION_STATES.AERIAL_LANDING_END)) {
           m.oosAerials++;
         } else if (anim === ACTION_STATES.ROLL_F || anim === ACTION_STATES.ROLL_B) m.oosRolls++;
         else if (anim === ACTION_STATES.SPOT_DODGE) m.oosSpotdodges++;

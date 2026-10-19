@@ -161,3 +161,70 @@ CREATE TABLE IF NOT EXISTS player_mechanics_stats (
 );
 
 CREATE INDEX IF NOT EXISTS idx_mech_game ON player_mechanics_stats(game_id);
+
+-- 7. Behavioral Habits & Vulnerability Profiling
+CREATE TABLE IF NOT EXISTS player_habits_stats (
+    game_id TEXT NOT NULL REFERENCES games(game_id) ON DELETE CASCADE,
+    player_index INTEGER NOT NULL,
+    connect_code TEXT,
+    character_id INTEGER NOT NULL,
+    is_complete BOOLEAN NOT NULL DEFAULT 1,
+
+    -- Ledge Options (10 counters)
+    climb_count INTEGER NOT NULL DEFAULT 0,
+    climb_punished INTEGER NOT NULL DEFAULT 0,
+    attack_count INTEGER NOT NULL DEFAULT 0,
+    attack_punished INTEGER NOT NULL DEFAULT 0,
+    roll_count INTEGER NOT NULL DEFAULT 0,
+    roll_punished INTEGER NOT NULL DEFAULT 0,
+    jump_count INTEGER NOT NULL DEFAULT 0,
+    jump_punished INTEGER NOT NULL DEFAULT 0,
+    ledgedash_count INTEGER NOT NULL DEFAULT 0,
+    ledgedash_punished INTEGER NOT NULL DEFAULT 0,
+
+    -- Ground Tech Options (8 counters)
+    tech_neutral_count INTEGER NOT NULL DEFAULT 0,
+    tech_neutral_punished INTEGER NOT NULL DEFAULT 0,
+    tech_forward_count INTEGER NOT NULL DEFAULT 0,
+    tech_forward_punished INTEGER NOT NULL DEFAULT 0,
+    tech_back_count INTEGER NOT NULL DEFAULT 0,
+    tech_back_punished INTEGER NOT NULL DEFAULT 0,
+    tech_miss_count INTEGER NOT NULL DEFAULT 0,
+    tech_miss_punished INTEGER NOT NULL DEFAULT 0,
+
+    -- Missed-Tech Wakeup Options (8 counters)
+    wakeup_stand_count INTEGER NOT NULL DEFAULT 0,
+    wakeup_stand_punished INTEGER NOT NULL DEFAULT 0,
+    wakeup_forward_count INTEGER NOT NULL DEFAULT 0,
+    wakeup_forward_punished INTEGER NOT NULL DEFAULT 0,
+    wakeup_back_count INTEGER NOT NULL DEFAULT 0,
+    wakeup_back_punished INTEGER NOT NULL DEFAULT 0,
+    wakeup_attack_count INTEGER NOT NULL DEFAULT 0,
+    wakeup_attack_punished INTEGER NOT NULL DEFAULT 0,
+
+    -- Grab Triggers (3 counters)
+    grabs_shield_pressure INTEGER NOT NULL DEFAULT 0,
+    grabs_scramble INTEGER NOT NULL DEFAULT 0,
+    grabs_neutral INTEGER NOT NULL DEFAULT 0,
+
+    -- Transitions & Advantage Commitment (2 counters)
+    neutral_resets INTEGER NOT NULL DEFAULT 0,
+    over_extensions INTEGER NOT NULL DEFAULT 0,
+
+    -- Out of Shield Choices & Stage Control (9 counters)
+    oos_roll_count INTEGER NOT NULL DEFAULT 0,
+    oos_roll_punished INTEGER NOT NULL DEFAULT 0,
+    oos_spotdodge_count INTEGER NOT NULL DEFAULT 0,
+    oos_spotdodge_punished INTEGER NOT NULL DEFAULT 0,
+    oos_grab_count INTEGER NOT NULL DEFAULT 0,
+    oos_grab_punished INTEGER NOT NULL DEFAULT 0,
+    oos_aerial_count INTEGER NOT NULL DEFAULT 0,
+    oos_aerial_punished INTEGER NOT NULL DEFAULT 0,
+    corner_drift_count INTEGER NOT NULL DEFAULT 0,
+
+    PRIMARY KEY (game_id, player_index)
+);
+
+CREATE INDEX IF NOT EXISTS idx_habits_connect_code ON player_habits_stats(connect_code);
+CREATE INDEX IF NOT EXISTS idx_habits_char ON player_habits_stats(character_id);
+
