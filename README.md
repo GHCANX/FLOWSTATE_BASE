@@ -21,6 +21,7 @@ To process massive replay archives (~11TB total dataset) without filling local d
 - **Lunar Melee Client**: Interacts with `https://api.lunarmelee.com` using a sliding-window rate limiter restricted to $\le 24\text{ downloads/minute}$ (below the external limit of 30 req/min).
 - **Fault-Tolerant Ingestion**: Automatically applies exponential backoff with jitter on HTTP 429/503 responses, and flags corrupted `.slp` files as `FAILED_CORRUPT` in `replay_status` without halting batch execution.
 
+
 ---
 
 ## 📁 Repository Organization
