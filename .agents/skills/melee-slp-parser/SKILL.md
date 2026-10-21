@@ -207,67 +207,51 @@ When batching replays from external APIs or disk directories, pipelines must tra
 
 ---
 
-## 6. Live Slippi Stream Ingestion & Remote Spectator Pipeline
+## 6. Live Slippi Stream Ingestion & Official Cloud Spectator Pipeline
 
-FlowState includes a live remote spectator receiver (`src/broadcast/broadcastService.js`) that provisions Slippi broadcast session keys (`SLP-XXXX-XXXX`) and accepts direct TCP relay streams.
+FlowState includes a dual-mode live remote spectator receiver (`src/broadcast/broadcastService.js` + `src/broadcast/slippiCloudRelay.js`) supporting both **Official Slippi Cloud Broadcasts** (`wss://spectate.slippi.gg`) and **Direct TCP Relay Streams** (port 51441 / dynamic fallback).
 
 ### Architecture & Data Flow
 
 ```
-[Remote Broadcaster] ──(TCP Stream)──> [BroadcastService (Port 51441 / Dynamic)]
-                                                 │
-                                     In-Memory SlpStream
-                                                 │
-                                 ┌───────────────┴───────────────┐
-                                 ▼                               ▼
-                      [gameStart (0x35)]                  [gameEnd (0x39)]
-                                 │                               │
-                      Extraction (≤ 100ms)                Reset UI State
-                                 │                               │
-                                 └───────────────┬───────────────┘
-                                                 ▼
-                                     [SSE Push: /api/broadcast/events]
-                                                 ▼
-                                       [Browser Match Card]
+[Slippi Launcher] ──(wss://spectate.slippi.gg)──┐
+[Direct TCP Peer] ──(TCP Port 51441 / Dynamic)──┼──> [BroadcastService]
+                                                │      ├─ _decodePayload (Buffer / Uint8Array / base64)
+                                                │      ├─ _preGameBuffer (64 KB cap before 0x35)
+                                                │      ├─ 10 Hz Telemetry Emitter (chunkCount, KB/s)
+                                                │      └─ In-Memory SlpStream
+                                                │
+                  ┌─────────────────────────────┼─────────────────────────────┐
+                  ▼                             ▼                             ▼
+       [menu_event / Pre-0x35]        [gameStart (0x35)]            [gameEnd (0x39)]
+                  │                             │                             │
+        State: MENUS_ACTIVE           State: IN_GAME (≤ 100ms)      Archive Dual-Storage
+        Active Pre-Game UI            1v1 Arena Match Card          Reset SlpStream (Next Game)
+                  │                             │                             │
+                  └─────────────────────────────┼─────────────────────────────┘
+                                                ▼
+                                    [SSE Push: /api/broadcast/events]
 ```
 
 ### Key Implementation Principles
 
-1. **In-Memory SlpStream Piping**:
-   Always pipe network streams directly into `SlpStream` in buffer mode (`mode: 1`). Never accumulate `.slp` data to disk during live streaming.
-   ```javascript
-   import { SlpStream } from "@slippi/slippi-js/node";
+1. **Official Slippi Cloud Relay Authentication (`wss://spectate.slippi.gg`)**:
+   - The Spectator / Broadcast ID pasted into Slippi Launcher is a real **Firebase UID (`localId`)** authenticated against Slippi's Firebase project (`identitytoolkit.googleapis.com` / `securetoken.googleapis.com`).
+   - Connect to `wss://spectate.slippi.gg` with `Sec-WebSocket-Protocol: slippi-beta` and `Authorization: Bearer <idToken>`.
+   - Normalize broadcast list schemas (`id` vs `broadcastId`, `target` vs `viewerKey` vs `spectatorId`) and envelope types (`{"type": "game_event", "payload": "..."}`, batched `{"type": "events", "events": [...]}`, and `{"type": "menu_event", "payload": "..."}`).
 
-   const slpStream = new SlpStream({ mode: 1 });
-   slpStream.on("gameStart", (settings) => {
-     const metadata = extractMatchStartMetadata(settings);
-     sseBroadcast("gameStart", metadata);
-   });
-   ```
+2. **Pre-Game Menu Byte Isolation & Handshake Buffering**:
+   - Never append pre-`0x35` (`GAME_START`) menu chunks to `_matchBuffer`, or saved `.slp` archives will fail UBJSON header parsing.
+   - Buffer incoming bytes in `_preGameBuffer` (capped at 64 KB) until `0x35` is detected; slice from the `0x35` offset into `_matchBuffer` and `SlpStream`.
+   - On `GAME_END` (`0x39`), immediately reset `SlpStream` (`_initParserPipeline()`) and clear `_matchBuffer` while keeping the broadcast session in `MENUS_ACTIVE` / `CONNECTED_TO_STREAM` for consecutive games.
 
-2. **Sub-100ms Handshake Parsing**:
-   Extract only essential match metadata on `gameStart` (`stageId`, player connect codes, display names, character IDs, costume indices). Handshake extraction executes in ~1.5ms–4.0ms, avoiding full frame processing during match initiation.
+3. **10 Hz SSE Stream Telemetry & Immediate State Transitions**:
+   - Ingest chunks synchronously in memory, tracking `chunkCount`, `bytesIngested`, and a 1-second sliding window for `throughputKbps`.
+   - Throttle `telemetry` SSE emissions to **10 Hz (`100ms`)** with an automatic idle decay timer (`0 KB/s` when idle), while dispatching discrete state transitions (`MENUS_ACTIVE`, `IN_GAME`, `GAME_END`) immediately.
 
-3. **Defensive Chunk Reassembly**:
-   TCP does not guarantee packet boundaries. Buffer partial binary chunks if smaller than expected event headers (< 29 bytes) before piping to `slpStream.write(chunk)`.
-
-4. **Socket Tracking & Clean Shutdown**:
-   Maintain an active socket set to ensure deterministic teardown:
-   ```javascript
-   const activeSockets = new Set();
-   server.on("connection", (socket) => {
-     activeSockets.add(socket);
-     socket.on("close", () => activeSockets.delete(socket));
-   });
-
-   function stopSession() {
-     for (const socket of activeSockets) {
-       socket.destroy();
-     }
-     activeSockets.clear();
-     server.close();
-   }
-   ```
+4. **Socket, Timer & Relay Teardown**:
+   - Maintain an active `Set<net.Socket>` and track all telemetry throttle/decay timers (`_telemetryTimer`, `_telemetryDecayTimer`).
+   - On `DELETE /api/broadcast/session`, clear all timers, disconnect the cloud WebSocket relay, and destroy all active TCP sockets before closing the server.
 
 ---
 
