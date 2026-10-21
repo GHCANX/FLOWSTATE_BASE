@@ -9,7 +9,7 @@ temp_slp/*
 # SQLite temporary journal files
 *.db-wal
 *.db-shm
-
+*.db
 # Test runtime outputs
 test_payloads/
 test_analytics.db*
