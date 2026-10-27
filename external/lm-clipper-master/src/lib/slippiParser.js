@@ -37,8 +37,10 @@ const getInfoFromSlpFile = function getInfoFromSlpFile(file) {
 
   // check stats for indicators of invalid game
   const { overall, stocks, gameComplete, conversions } = game.getStats()
-  // TODO: Come back to this
-  if (!gameComplete) {
+  const gameEnd = game.getGameEnd()
+  const NO_CONTEST = 7
+
+  if (!gameComplete && (!gameEnd || gameEnd.gameEndMethod !== NO_CONTEST)) {
     return { invalid: true, reason: 'Game incomplete' }
   }
   if (overall.every((p) => p.totalDamage < 100)) {
