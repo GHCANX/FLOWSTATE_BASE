@@ -207,7 +207,6 @@ export class SlpFile extends Writable {
     ]);
 
     // Write last frame index
-    // TODO: Get last frame
     const lastFrame = this.metadata.lastFrame;
     footer = Buffer.concat([
       footer,

@@ -297,7 +297,7 @@ export class AnalyticsService {
     `).all();
 
     if (format === 'csv') {
-      if (games.length === 0) return '';
+      if (games.length === 0) return 'game_id,start_at\n';
       const headers = Object.keys(games[0]).join(',');
       const rows = games.map(row => 
         Object.values(row).map(val => (val === null || val === undefined ? '' : JSON.stringify(val))).join(',')
