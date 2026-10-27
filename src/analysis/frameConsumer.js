@@ -161,8 +161,9 @@ export class FrameConsumer {
     });
 
     // High level overall performance
+    const overallStatsMap = new Map(stats.overall?.map(o => [o.playerIndex, o]) || []);
     const overallRecords = settings.players.map(p => {
-      const pStats = stats.overall?.find(o => o.playerIndex === p.playerIndex) || {};
+      const pStats = overallStatsMap.get(p.playerIndex) || {};
       return {
         playerIndex: p.playerIndex,
         inputsTotal: pStats.inputCounts?.total ?? 0,

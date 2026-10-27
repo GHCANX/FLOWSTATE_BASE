@@ -344,13 +344,14 @@ export function isGrabbed(state: number): boolean {
   return state >= State.CAPTURE_START && state <= State.CAPTURE_END;
 }
 
-// TODO: Find better implementation of 3 seperate ranges
+const COMMAND_GRAB_RANGES = [
+  [State.COMMAND_GRAB_RANGE1_START, State.BARREL_WAIT - 1],
+  [State.BARREL_WAIT + 1, State.COMMAND_GRAB_RANGE1_END],
+  [State.COMMAND_GRAB_RANGE2_START, State.COMMAND_GRAB_RANGE2_END],
+];
+
 export function isCommandGrabbed(state: number): boolean {
-  return (
-    ((state >= State.COMMAND_GRAB_RANGE1_START && state <= State.COMMAND_GRAB_RANGE1_END) ||
-      (state >= State.COMMAND_GRAB_RANGE2_START && state <= State.COMMAND_GRAB_RANGE2_END)) &&
-    state !== State.BARREL_WAIT
-  );
+  return COMMAND_GRAB_RANGES.some(([start, end]) => state >= start && state <= end);
 }
 
 export function isDead(state: number): boolean {

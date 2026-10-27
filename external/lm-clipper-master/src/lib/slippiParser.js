@@ -27,7 +27,7 @@ const getInfoFromSlpFile = function getInfoFromSlpFile(file) {
 
   // check metadata for indicators of invalid game
   const metadata = game.getMetadata()
-  const length = metadata.lastFrame / 60
+  const length = metadata.lastFrame / 59.94
   if (Number.isNaN(length)) {
     return { invalid: true, reason: 'No metadata' }
   }
@@ -37,8 +37,10 @@ const getInfoFromSlpFile = function getInfoFromSlpFile(file) {
 
   // check stats for indicators of invalid game
   const { overall, stocks, gameComplete, conversions } = game.getStats()
-  // TODO: Come back to this
-  if (!gameComplete) {
+  const gameEnd = game.getGameEnd()
+  const NO_CONTEST = 7
+
+  if (!gameComplete && (!gameEnd || gameEnd.gameEndMethod !== NO_CONTEST)) {
     return { invalid: true, reason: 'Game incomplete' }
   }
   if (overall.every((p) => p.totalDamage < 100)) {
@@ -95,7 +97,7 @@ const getInfoFromSlpFile = function getInfoFromSlpFile(file) {
   return {
     startAt: metadata.startAt,
     startAtTimestamp: new Date(metadata.startAt).getTime(),
-    length: Math.floor(metadata.lastFrame / 60), // TODO: Change to 59.994?
+    length: Math.floor(metadata.lastFrame / 59.94),
     stageId: settings.stageId,
     winner: winnerIndex,
     players: [
@@ -122,7 +124,7 @@ function getDeepInfoFromSlpFile(file) {
   const game = new slpParser.default(file)
   const settings = game.getSettings()
   const metadata = game.getMetadata()
-  const _length = metadata.lastFrame / 60
+  const _length = metadata.lastFrame / 59.94
   const gameStats = game.getStats()
   return {
     settings,
