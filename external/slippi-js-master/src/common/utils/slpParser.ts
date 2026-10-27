@@ -139,13 +139,35 @@ export class SlpParser extends TypedEventEmitter<SlpParserEventMap> {
   }
 
   getLatestFrame(): FrameEntryType | undefined {
-    // return this.playerFrames[this.latestFrameIndex];
-
-    // TODO: Modify this to check if we actually have all the latest frame data and return that
-    // TODO: If we do. For now I'm just going to take a shortcut
     const allFrames = this.getFrames();
     const frameIndex = this.latestFrameIndex != null ? this.latestFrameIndex : Frames.FIRST;
-    const indexToUse = this.gameEnd ? frameIndex : frameIndex - 1;
+
+    if (this.gameEnd) {
+      return allFrames[frameIndex] || undefined;
+    }
+
+    const frame = allFrames[frameIndex];
+    if (!frame || !this.settings) {
+      return allFrames[frameIndex - 1] || undefined;
+    }
+
+    // Check if we actually have all the latest frame data
+    let frameComplete = true;
+    for (const player of this.settings.players) {
+      const playerFrameInfo = frame.players[player.playerIndex];
+      // Allow player frame info to be empty in non 1v1 games since
+      // players which have been defeated will have no frame info.
+      if (this.settings.players.length > 2 && !playerFrameInfo) {
+        continue;
+      }
+
+      if (!playerFrameInfo || !playerFrameInfo.pre || !playerFrameInfo.post) {
+        frameComplete = false;
+        break;
+      }
+    }
+
+    const indexToUse = frameComplete ? frameIndex : frameIndex - 1;
     return allFrames[indexToUse] || undefined;
   }
 
