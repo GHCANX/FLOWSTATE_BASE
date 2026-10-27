@@ -908,7 +908,7 @@ function renderDashboardData(pipeline, footprint, audit, currentBatch) {
       auditLogBox.innerHTML = audit.recentFailures.map(f => {
         const shortId = f.replay_id ? f.replay_id.slice(0, 12) : 'Unknown';
         const msg = f.error_message || 'Corrupt UBJSON stream';
-        return `<div class="audit-log-line"><span class="text-red">[${f.status}]</span> ${shortId}... - ${escapeHtml(msg)}</div>`;
+        return `<div class="audit-log-line"><span class="text-red">[${escapeHtml(f.status)}]</span> ${shortId}... - ${escapeHtml(msg)}</div>`;
       }).join('');
     } else {
       if (auditStatusPill) {
