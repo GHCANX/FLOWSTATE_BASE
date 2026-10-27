@@ -297,7 +297,7 @@ export class AnalyticsService {
     `).all();
 
     if (format === 'csv') {
-      if (games.length === 0) return '';
+      if (games.length === 0) return 'game_id,start_at,duration_seconds,stage_id,winner_port,player_index,port,character_id,connect_code,is_winner,l_cancel_rate,wavedash_count,dash_dance_turns,shield_drops,crouch_cancels,avg_galint_frames,ledgedash_count,ipm,openings_per_kill,damage_per_opening,total_damage_dealt\n';
       const headers = Object.keys(games[0]).join(',');
       const rows = games.map(row => 
         Object.values(row).map(val => (val === null || val === undefined ? '' : JSON.stringify(val))).join(',')
