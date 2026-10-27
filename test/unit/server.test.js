@@ -4,7 +4,6 @@ import supertest from 'supertest';
 import { EventEmitter } from 'node:events';
 import { parseJsonBody, createServer } from '../../src/server/server.js';
 import { getDatabase, closeDatabase } from '../../src/database/db.js';
-import { before, after } from 'node:test';
 
 class MockBroadcastService extends EventEmitter {
   constructor() {
@@ -93,14 +92,9 @@ describe('server.js Unit Tests', () => {
   });
 
   describe('Route Handlers', () => {
-    before(() => {
-      // Set up in-memory db for the route handlers
-      getDatabase(':memory:');
-    });
 
-    after(() => {
-      closeDatabase();
-    });
+    // Global before hook handles the memory db initialization
+    // before(() => getDatabase(':memory:'));
 
     it('should return 204 for OPTIONS requests', async () => {
       const server = createServer();
@@ -128,6 +122,7 @@ describe('server.js Unit Tests', () => {
     });
 
     it('should handle /api/broadcast/auth/login POST', async () => {
+
       const mockBroadcast = new MockBroadcastService();
       const server = createServer({ broadcastService: mockBroadcast });
 
@@ -139,6 +134,7 @@ describe('server.js Unit Tests', () => {
     });
 
     it('should handle /api/broadcast/auth/login POST errors', async () => {
+
       const mockBroadcast = new MockBroadcastService();
       const server = createServer({ broadcastService: mockBroadcast });
 
@@ -150,6 +146,7 @@ describe('server.js Unit Tests', () => {
     });
 
     it('should handle /api/broadcast/auth/logout POST', async () => {
+
       const mockBroadcast = new MockBroadcastService();
       const server = createServer({ broadcastService: mockBroadcast });
 
@@ -159,6 +156,7 @@ describe('server.js Unit Tests', () => {
     });
 
     it('should handle /api/broadcast/auth/status GET', async () => {
+
       const mockBroadcast = new MockBroadcastService();
       const server = createServer({ broadcastService: mockBroadcast });
 
@@ -168,6 +166,7 @@ describe('server.js Unit Tests', () => {
     });
 
     it('should handle /api/broadcast/session POST', async () => {
+
       const mockBroadcast = new MockBroadcastService();
       const server = createServer({ broadcastService: mockBroadcast });
 
@@ -177,6 +176,7 @@ describe('server.js Unit Tests', () => {
     });
 
     it('should handle /api/broadcast/session GET', async () => {
+
       const mockBroadcast = new MockBroadcastService();
       const server = createServer({ broadcastService: mockBroadcast });
 
@@ -186,6 +186,7 @@ describe('server.js Unit Tests', () => {
     });
 
     it('should handle /api/broadcast/session DELETE', async () => {
+
       const mockBroadcast = new MockBroadcastService();
       const server = createServer({ broadcastService: mockBroadcast });
 
@@ -195,41 +196,81 @@ describe('server.js Unit Tests', () => {
     });
 
     it('should handle /api/recent-games GET', async () => {
-      const server = createServer();
+      getDatabase(':memory:');
+      const server = createServer({
+      broadcastService: new MockBroadcastService(),
+      analyticsService: {
+        getGameHabits: () => ({}),
+        getPlayerHabitsProfile: () => ({})
+      }
+    });
       const response = await supertest(server).get('/api/recent-games');
       assert.strictEqual(response.status, 200);
       assert.ok(Array.isArray(response.body));
+      closeDatabase();
     });
 
     it('should handle /api/pipeline/status GET', async () => {
-      const server = createServer();
+      getDatabase(':memory:');
+      const server = createServer({
+      broadcastService: new MockBroadcastService(),
+      analyticsService: {
+        getGameHabits: () => ({}),
+        getPlayerHabitsProfile: () => ({})
+      }
+    });
       const response = await supertest(server).get('/api/pipeline/status');
       assert.strictEqual(response.status, 200);
       assert.ok('activeCheckpoint' in response.body || response.body.activeCheckpoint === null);
+      closeDatabase();
     });
 
     it('should handle /api/analytics/mechanics GET', async () => {
-      const server = createServer();
+      getDatabase(':memory:');
+      const server = createServer({
+      broadcastService: new MockBroadcastService(),
+      analyticsService: {
+        getGameHabits: () => ({}),
+        getPlayerHabitsProfile: () => ({})
+      }
+    });
       const response = await supertest(server).get('/api/analytics/mechanics');
       assert.strictEqual(response.status, 200);
       assert.ok('mechanics' in response.body);
       assert.ok('overall' in response.body);
       assert.ok('topCharacters' in response.body);
+      closeDatabase();
     });
 
     it('should handle /api/audit/errors GET', async () => {
-      const server = createServer();
+      getDatabase(':memory:');
+      const server = createServer({
+      broadcastService: new MockBroadcastService(),
+      analyticsService: {
+        getGameHabits: () => ({}),
+        getPlayerHabitsProfile: () => ({})
+      }
+    });
       const response = await supertest(server).get('/api/audit/errors');
       assert.strictEqual(response.status, 200);
       assert.ok('statusCounts' in response.body);
       assert.ok('recentFailures' in response.body);
+      closeDatabase();
     });
 
     it('should handle /api/batches GET', async () => {
-      const server = createServer();
+      getDatabase(':memory:');
+      const server = createServer({
+      broadcastService: new MockBroadcastService(),
+      analyticsService: {
+        getGameHabits: () => ({}),
+        getPlayerHabitsProfile: () => ({})
+      }
+    });
       const response = await supertest(server).get('/api/batches');
       assert.strictEqual(response.status, 200);
       assert.ok(Array.isArray(response.body));
+      closeDatabase();
     });
   });
 });
