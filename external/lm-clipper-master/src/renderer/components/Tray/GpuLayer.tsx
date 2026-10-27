@@ -350,6 +350,15 @@ export function GpuLayer({
     )
   }, [selectionEnabled, hoverIndex, clips, clipSize, gap, columns, selectedIds])
 
+  // Map clip ID to index for fast O(1) lookup during selection rendering
+  const clipIdToIndex = useMemo(() => {
+    const map = new Map<string, number>()
+    for (let i = 0; i < clips.length; i++) {
+      map.set(clips[i].id, i)
+    }
+    return map
+  }, [clips])
+
   // Generate selection overlay elements (only if selection enabled)
   const selectionOverlays = useMemo(() => {
     if (!selectionEnabled || selectedIds!.size === 0) return null
@@ -358,11 +367,12 @@ export function GpuLayer({
     const padding = gap
     const overlays: JSX.Element[] = []
 
-    for (let i = 0; i < clips.length; i++) {
-      if (!selectedIds!.has(clips[i].id)) continue
+    for (const id of selectedIds!) {
+      const index = clipIdToIndex.get(id)
+      if (index === undefined) continue
 
-      const row = Math.floor(i / columns)
-      const col = i % columns
+      const row = Math.floor(index / columns)
+      const col = index % columns
       const top = padding + row * cellSize
       const left = padding + col * cellSize
 
@@ -371,7 +381,7 @@ export function GpuLayer({
 
       overlays.push(
         <div
-          key={clips[i].id}
+          key={id}
           style={{
             position: 'absolute',
             top,
@@ -391,7 +401,7 @@ export function GpuLayer({
   }, [
     selectionEnabled,
     selectedIds,
-    clips,
+    clipIdToIndex,
     clipSize,
     gap,
     columns,
