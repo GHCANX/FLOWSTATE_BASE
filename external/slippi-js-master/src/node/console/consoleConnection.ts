@@ -128,6 +128,9 @@ export class ConsoleConnection extends TypedEventEmitter<ConnectionEventMap> imp
 
     // TODO: reconnect on failed reconnect, not sure how
     // TODO: to do this
+    // We want to reconnect on failed initial connections too, so turn on auto-reconnect
+    this.shouldReconnect = this.options.autoReconnect;
+
     const connection = reconnect(
       {
         initialDelay: 2000,
@@ -137,8 +140,6 @@ export class ConsoleConnection extends TypedEventEmitter<ConnectionEventMap> imp
       },
       (client) => {
         this.emit(ConnectionEvent.CONNECT, undefined);
-        // We successfully connected so turn on auto-reconnect
-        this.shouldReconnect = this.options.autoReconnect;
         this.client = client;
 
         let commState: CommunicationState = CommunicationState.INITIAL;
@@ -221,15 +222,15 @@ export class ConsoleConnection extends TypedEventEmitter<ConnectionEventMap> imp
         connection.reconnect = false;
         connection.disconnect();
         this._setStatus(ConnectionStatus.DISCONNECTED);
+      } else {
+        this._setStatus(ConnectionStatus.RECONNECT_WAIT);
       }
-      // TODO: Figure out how to set RECONNECT_WAIT state here. Currently it will stay on
-      // TODO: Connecting... forever
     });
 
     connection.on("error", (err) => {
       console.warn(`Connection on port ${port} encountered an error.`, err);
 
-      this._setStatus(ConnectionStatus.DISCONNECTED);
+      this._setStatus(this.shouldReconnect ? ConnectionStatus.RECONNECT_WAIT : ConnectionStatus.DISCONNECTED);
       this.emit(ConnectionEvent.ERROR, `Connection on port ${port} encountered an error.\n${err}`);
     });
 
