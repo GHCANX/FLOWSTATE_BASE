@@ -49,25 +49,34 @@ const getInfoFromSlpFile = function getInfoFromSlpFile(file) {
   if (overall.some((p) => p.inputCount < 100)) {
     return { invalid: true, reason: 'InputCount < 100' }
   }
+
+  const gameEnd = game.getGameEnd()
+
   const p1Stocks = stocks.filter(
     (stock) => stock.playerIndex === p1.playerIndex,
   )
   const p2Stocks = stocks.filter(
     (stock) => stock.playerIndex === p2.playerIndex,
   )
-  // TODO: Come back to this
-  if (p1Stocks.length < 4 && p2Stocks.length < 4) {
+
+  // Game is invalid if neither player lost 4 stocks and there is no placement info determining a winner
+  // or LRAS initiator. In modern slippi placements handle LRAS/Timeouts.
+  const hasValidWinner = gameEnd && gameEnd.placements && gameEnd.placements.some(p => p.position === 0);
+
+  if (p1Stocks.length < 4 && p2Stocks.length < 4 && !hasValidWinner) {
     return { invalid: true, reason: 'Neither player lost 4 stocks' }
   }
 
   // Get Winner
   let winnerIndex
-  if (p1Stocks.length < 4) {
+  if (hasValidWinner) {
+    winnerIndex = gameEnd.placements.find(p => p.position === 0).playerIndex
+  } else if (p1Stocks.length < 4) {
     winnerIndex = p1Stocks[0].playerIndex
-  }
-  if (p2Stocks.length < 4) {
+  } else if (p2Stocks.length < 4) {
     winnerIndex = p2Stocks[0].playerIndex
   }
+
   if (typeof winnerIndex === 'undefined') {
     // if both last stocks ended on null, game must have ended with pause
     if (!p1Stocks[3].endFrame && !p2Stocks[3].endFrame) {
