@@ -25,6 +25,7 @@ export type CommunicationMessage = {
 export class ConsoleCommunication {
   private receiveBuf = Buffer.from([]);
   private messages: CommunicationMessage[] = [];
+  private instanceToken = Math.floor(Math.random() * 0xffffffff);
 
   receive(data: Buffer): void {
     this.receiveBuf = Buffer.concat([this.receiveBuf, data]);
@@ -62,14 +63,15 @@ export class ConsoleCommunication {
   }
 
   genHandshakeOut(cursor: Uint8Array, clientToken: number, isRealtime = false): Buffer {
+    const tokenToUse = clientToken || this.instanceToken;
     const clientTokenBuf = Buffer.from([0, 0, 0, 0]);
-    clientTokenBuf.writeUInt32BE(clientToken, 0);
+    clientTokenBuf.writeUInt32BE(tokenToUse, 0);
 
     const message = {
       type: CommunicationType.HANDSHAKE,
       payload: {
         cursor: cursor,
-        clientToken: Uint8Array.from(clientTokenBuf), // TODO: Use real instance token
+        clientToken: Uint8Array.from(clientTokenBuf),
         isRealtime: isRealtime,
       },
     };
