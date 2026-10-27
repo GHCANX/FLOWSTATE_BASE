@@ -19,7 +19,8 @@
     "serve": "node --no-warnings src/cli.js serve"
   },
   "dependencies": {
-    "@slippi/slippi-js": "^9.1.3"
+    "@slippi/slippi-js": "^9.1.3",
+    "ws": "^8.22.0"
   },
   "devDependencies": {
     "eslint": "^10.13.0",
