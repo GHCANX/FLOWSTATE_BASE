@@ -1261,6 +1261,7 @@ export function Tray({
         )}
 
         {/* GPU Layer (modes mode3 and mode4) */}
+        {/* TODO: Selection in GPU mode is implemented but disabled for now - can enable later */}
         {hasContent && (
           <GpuLayer
             clips={lightData}
@@ -1271,8 +1272,6 @@ export function Tray({
             trayWidth={trayWidth}
             trayHeight={trayHeight}
             visible={isGpu}
-            selectedIds={selectedIds}
-            onClipClick={handleClipMouseDown}
           />
         )}
       </div>

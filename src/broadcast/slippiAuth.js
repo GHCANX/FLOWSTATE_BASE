@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
-export const SLIPPI_FIREBASE_API_KEY = process.env.SLIPPI_FIREBASE_API_KEY || '';
+export const SLIPPI_FIREBASE_API_KEY = 'AIzaSyAuQqc_wgqcUu3FqrICEPZ9Av_hPxMR_i4';
 export const FIREBASE_SIGNIN_URL = `https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=${SLIPPI_FIREBASE_API_KEY}`;
 export const FIREBASE_REFRESH_URL = `https://securetoken.googleapis.com/v1/token?key=${SLIPPI_FIREBASE_API_KEY}`;
 export const SLIPPI_GRAPHQL_URL = 'https://slippi.gg/graphql';

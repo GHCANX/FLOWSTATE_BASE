@@ -29,7 +29,7 @@ process.on('SIGINT', () => {
   isAborting = true;
 });
 
-export function resolveStageId(str) {
+function resolveStageId(str) {
   if (!str) return null;
   const s = str.toLowerCase().trim();
   if (s === 'legal') return '31,32,28,8,2,3';

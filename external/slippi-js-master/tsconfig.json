@@ -1,7 +1,6 @@
 {
   "include": ["src", "types", "test"],
   "compilerOptions": {
-    "types": ["jest", "node"],
     "target": "ES2022",
     "module": "esnext",
     "lib": ["dom", "esnext"],

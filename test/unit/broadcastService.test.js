@@ -53,10 +53,7 @@ describe('BroadcastService', () => {
     }
   });
 
-  it('should initialize with DISCONNECTED state (or IDLE per implementation)', () => {
-    // Note: The issue description mentions "this.state = BroadcastState.DISCONNECTED",
-    // but the source code actually uses "this.status = BroadcastState.IDLE".
-    // We will test what the actual constructor does based on the source code.
+  it('should initialize with IDLE state (as originally implemented)', () => {
     assert.strictEqual(broadcastService.status, BroadcastState.IDLE);
     assert.strictEqual(broadcastService.parserState, BroadcastState.IDLE);
     assert.strictEqual(broadcastService.activeBroadcasts.length, 0);
