@@ -630,6 +630,28 @@ export function createServer(options = {}) {
       }
 
       const args = Array.isArray(reqData.args) ? reqData.args : [];
+
+      const ALLOWED_COMMANDS = new Set([
+        'batch', 'matchup', 'game', 'export', 'overview',
+        'player', 'status', 'serve', 'ui', 'sprites', 'help'
+      ]);
+
+      if (args.length === 0 || !ALLOWED_COMMANDS.has(args[0])) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Invalid or missing CLI command' }));
+        return;
+      }
+
+      // Validate all arguments only contain safe characters to prevent any command injection or weird flags
+      const SAFE_ARG_REGEX = /^[a-zA-Z0-9_\-\.\=\/#]+$/;
+      for (const arg of args) {
+        if (!SAFE_ARG_REGEX.test(arg)) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Argument contains invalid characters' }));
+          return;
+        }
+      }
+
       activeCommandStr = `node src/cli.js ${args.join(' ')}`;
       console.log(`[Server] Executing: ${activeCommandStr}`);
 
