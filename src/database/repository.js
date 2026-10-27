@@ -234,6 +234,27 @@ export class ReplayRepository {
     };
   }
 
+  _getInsertOverallStmt(count) {
+    if (!this._overallStmts) this._overallStmts = {};
+    if (this._overallStmts[count]) return this._overallStmts[count];
+
+    const placeholders = Array(count).fill('(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').join(', ');
+    const query = `
+      INSERT INTO player_overall_stats (
+        game_id, player_index, inputs_total, ipm, digital_ipm,
+        neutral_win_ratio, counter_hit_ratio, beneficial_trade_ratio,
+        openings_per_kill, damage_per_opening, total_damage_dealt,
+        kill_count, conversion_count
+      ) VALUES ${placeholders}
+      ON CONFLICT(game_id, player_index) DO UPDATE SET
+        ipm = excluded.ipm,
+        total_damage_dealt = excluded.total_damage_dealt,
+        kill_count = excluded.kill_count
+    `;
+    this._overallStmts[count] = this.db.prepare(query);
+    return this._overallStmts[count];
+  }
+
   /**
    * Records processing status (e.g. COMPLETED or FAILED_CORRUPT)
    */
@@ -291,22 +312,27 @@ export class ReplayRepository {
         );
       }
 
-      for (const o of overallStats) {
-        this.stmts.insertOverall.run(
-          game.gameId,
-          o.playerIndex,
-          o.inputsTotal,
-          o.ipm,
-          o.digitalIpm,
-          o.neutralWinRatio,
-          o.counterHitRatio,
-          o.beneficialTradeRatio,
-          o.openingsPerKill,
-          o.damagePerOpening,
-          o.totalDamageDealt,
-          o.killCount,
-          o.conversionCount
-        );
+      if (overallStats && overallStats.length > 0) {
+        const stmt = this._getInsertOverallStmt(overallStats.length);
+        const params = [];
+        for (const o of overallStats) {
+          params.push(
+            game.gameId,
+            o.playerIndex,
+            o.inputsTotal,
+            o.ipm,
+            o.digitalIpm,
+            o.neutralWinRatio,
+            o.counterHitRatio,
+            o.beneficialTradeRatio,
+            o.openingsPerKill,
+            o.damagePerOpening,
+            o.totalDamageDealt,
+            o.killCount,
+            o.conversionCount
+          );
+        }
+        stmt.run(...params);
       }
 
       for (const m of mechanicsStats) {
