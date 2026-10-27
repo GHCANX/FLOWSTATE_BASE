@@ -66,3 +66,5 @@ typings/
 # Mac
 .DS_Store
 .tool-versions
+dist
+node_modules

@@ -1,1 +1,1 @@
-{"version":3,"file":"index.d.ts","sources":["../src/browser/SlippiGameWeb.ts"],"mappings":";;;cAMa,aAAc,SAAQ,cAAc;gBACnC,KAAK,EAAE,UAAU,EAAE,IAAI,CAAC,EAAE,WAAW;IAYxC,WAAW,IAAI,MAAM,GAAG,SAAS;CAG3C;;;;","names":[]}
+{"version":3,"file":"index.d.ts","sources":["../src/browser/SlippiGameWeb.ts"],"mappings":";;;AAGO,cAAc,aAAa,SAAS,cAAc;AACzD,uBAAuB,UAAU,SAAS,WAAW;AACrD;AACA;;","names":[]}

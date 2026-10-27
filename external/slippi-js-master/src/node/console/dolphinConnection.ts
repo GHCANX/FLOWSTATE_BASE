@@ -131,12 +131,6 @@ export class DolphinConnection extends TypedEventEmitter<ConnectionEventMap> imp
           break;
         case DolphinMessageType.GAME_EVENT: {
           const { payload } = message;
-          //TODO: remove after game start and end messages have been in stable Ishii for a bit
-          if (!payload) {
-            // We got a disconnection request
-            this.disconnect();
-            return;
-          }
 
           this._updateCursor(message, dataString);
 
