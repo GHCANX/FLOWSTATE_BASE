@@ -31,7 +31,7 @@ process.on('SIGINT', () => {
 
 export function resolveStageId(str) {
   if (!str) return null;
-  const s = str.toLowerCase().trim();
+  const s = str.toLowerCase().replace(/[^a-z0-9]/g, '');
   if (s === 'legal') return '31,32,28,8,2,3';
   if (s === 'battlefield' || s === 'bf') return '31';
   if (s === 'finaldestination' || s === 'fd') return '32';
