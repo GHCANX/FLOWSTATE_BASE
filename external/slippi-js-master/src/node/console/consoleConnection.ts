@@ -142,7 +142,7 @@ export class ConsoleConnection extends TypedEventEmitter<ConnectionEventMap> imp
         this.client = client;
 
         let commState: CommunicationState = CommunicationState.INITIAL;
-        client.on("data", (data) => {
+        client.on("data", (data: Buffer) => {
           if (commState === CommunicationState.INITIAL) {
             commState = this._getInitialCommState(data);
             // console.log(`Connected to ${ip}:${port} with type: ${commState}`);
@@ -221,9 +221,9 @@ export class ConsoleConnection extends TypedEventEmitter<ConnectionEventMap> imp
         connection.reconnect = false;
         connection.disconnect();
         this._setStatus(ConnectionStatus.DISCONNECTED);
+      } else {
+        this._setStatus(ConnectionStatus.RECONNECT_WAIT);
       }
-      // TODO: Figure out how to set RECONNECT_WAIT state here. Currently it will stay on
-      // TODO: Connecting... forever
     });
 
     connection.on("error", (err) => {
