@@ -35,7 +35,7 @@ const MIME_TYPES = {
  * @param {http.IncomingMessage} req
  * @returns {Promise<any>}
  */
-function parseJsonBody(req) {
+export function parseJsonBody(req) {
   return new Promise((resolve, reject) => {
     let body = '';
     req.on('data', chunk => {
