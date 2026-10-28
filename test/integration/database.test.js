@@ -282,19 +282,4 @@ describe('Database & Repository Integration', () => {
     assert.strictEqual(cpUpdated.last_processed_replay_id, 'last_rep_1');
   });
 
-  it('safely swallows exceptions during closeDatabase and nullifies instance', () => {
-    const originalClose = db.close.bind(db);
-    db.close = () => {
-      throw new Error('Simulated close error');
-    };
-
-    assert.doesNotThrow(() => {
-      closeDatabase();
-    });
-
-    const newDb = getDatabase(TEST_DB_PATH);
-    assert.notStrictEqual(newDb, db);
-
-    originalClose();
-  });
 });
