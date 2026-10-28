@@ -93,3 +93,18 @@ export function getStageDetails(stageId, rawName = '') {
     legal: false,
   };
 }
+
+export function formatYmd(d) {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+export function isValidConnectCode(code) {
+  return /^[A-Z0-9]{1,8}#[0-9]{1,4}$/i.test(code);
+}
+
+export function formatBytesToMB(bytes) {
+  return bytes ? (bytes / (1024 * 1024)).toFixed(2) + ' MB' : '0 MB';
+}

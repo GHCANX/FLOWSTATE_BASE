@@ -6,7 +6,10 @@ import {
   ansiToHtml,
   getCharacterPortraitUrl,
   getCharacterInitials,
-  getStageDetails
+  getStageDetails,
+  formatYmd,
+  isValidConnectCode,
+  formatBytesToMB
 } from './utils.js';
 
 let currentTab = 'matchup';
@@ -247,12 +250,6 @@ function toggleFilterAccordion() {
 function setDatePreset(preset) {
   datePills.forEach(p => p.classList.toggle('active', p.dataset.preset === preset));
   const now = new Date();
-  const formatYmd = d => {
-    const y = d.getFullYear();
-    const m = String(d.getMonth() + 1).padStart(2, '0');
-    const day = String(d.getDate()).padStart(2, '0');
-    return `${y}-${m}-${day}`;
-  };
 
   if (preset === 'today') {
     const todayStr = formatYmd(now);
@@ -339,14 +336,13 @@ function validateFilters() {
   }
 
   // Connect code format check (TAG#123)
-  const codeRegex = /^[A-Z0-9]{1,8}#[0-9]{1,4}$/i;
   const p1Val = filterP1Code?.value?.trim();
   const p2Val = filterP2Code?.value?.trim();
   let codeError = null;
 
-  if (p1Val && !codeRegex.test(p1Val)) {
+  if (p1Val && !isValidConnectCode(p1Val)) {
     codeError = 'Connect Code (P1) should follow format TAG#123';
-  } else if (p2Val && !codeRegex.test(p2Val)) {
+  } else if (p2Val && !isValidConnectCode(p2Val)) {
     codeError = 'Opponent Code (P2) should follow format TAG#123';
   }
 
@@ -603,7 +599,7 @@ function renderBatchHistory(batches) {
     const shortId = b.batch_id ? b.batch_id.slice(0, 8) : 'batch';
     const state = b.lifecycle_state || 'completed';
     const filterDesc = b.filter_criteria ? escapeHtml(b.filter_criteria) : 'Standard Batch Window';
-    const mb = b.storage_bytes ? (b.storage_bytes / (1024 * 1024)).toFixed(2) + ' MB' : '0 MB';
+    const mb = formatBytesToMB(b.storage_bytes);
 
     return `
       <div class="batch-card ${isSel ? 'selected' : ''}" data-batch-id="${escapeHtml(b.batch_id)}" role="button" tabindex="0">

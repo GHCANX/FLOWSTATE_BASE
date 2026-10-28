@@ -5,7 +5,10 @@ import {
   ansiToHtml,
   getCharacterPortraitUrl,
   getCharacterInitials,
-  getStageDetails
+  getStageDetails,
+  formatYmd,
+  isValidConnectCode,
+  formatBytesToMB
 } from '../../src/ui/utils.js';
 
 describe('UI Utilities', () => {
@@ -85,6 +88,47 @@ describe('UI Utilities', () => {
     test('returns fallback details for unknown stages', () => {
       assert.deepStrictEqual(getStageDetails(999), { name: 'Unknown Stage', file: 'nonlegal.jpg', legal: false });
       assert.deepStrictEqual(getStageDetails(999, 'Mute City'), { name: 'Mute City', file: 'nonlegal.jpg', legal: false });
+    });
+  });
+
+  describe('formatYmd', () => {
+    test('formats dates correctly to YYYY-MM-DD', () => {
+      const d1 = new Date(2023, 0, 5); // Jan 5, 2023
+      assert.strictEqual(formatYmd(d1), '2023-01-05');
+
+      const d2 = new Date(2022, 11, 25); // Dec 25, 2022
+      assert.strictEqual(formatYmd(d2), '2022-12-25');
+    });
+  });
+
+  describe('isValidConnectCode', () => {
+    test('returns true for valid connect codes', () => {
+      assert.strictEqual(isValidConnectCode('TAG#123'), true);
+      assert.strictEqual(isValidConnectCode('MANG#0'), true);
+      assert.strictEqual(isValidConnectCode('A#1234'), true);
+    });
+
+    test('returns false for invalid connect codes', () => {
+      assert.strictEqual(isValidConnectCode('TAG123'), false);
+      assert.strictEqual(isValidConnectCode('#123'), false);
+      assert.strictEqual(isValidConnectCode('TOOLONGTAG#123'), false);
+      assert.strictEqual(isValidConnectCode('TAG#12345'), false);
+      assert.strictEqual(isValidConnectCode(''), false);
+      assert.strictEqual(isValidConnectCode(null), false);
+      assert.strictEqual(isValidConnectCode(undefined), false);
+    });
+  });
+
+  describe('formatBytesToMB', () => {
+    test('formats byte counts into MB strings', () => {
+      assert.strictEqual(formatBytesToMB(1048576), '1.00 MB');
+      assert.strictEqual(formatBytesToMB(2621440), '2.50 MB');
+    });
+
+    test('handles 0, null, or undefined correctly', () => {
+      assert.strictEqual(formatBytesToMB(0), '0 MB');
+      assert.strictEqual(formatBytesToMB(null), '0 MB');
+      assert.strictEqual(formatBytesToMB(undefined), '0 MB');
     });
   });
 });
