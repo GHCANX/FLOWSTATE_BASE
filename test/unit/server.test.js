@@ -1,4 +1,4 @@
-import { describe, it } from 'node:test';
+import { describe, it, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import supertest from 'supertest';
 import { EventEmitter } from 'node:events';
@@ -273,4 +273,85 @@ describe('server.js Unit Tests', () => {
       closeDatabase();
     });
   });
+
+  describe('Broadcast Routes', () => {
+    let server;
+    beforeEach(() => {
+      const mockBroadcast = new EventEmitter();
+      mockBroadcast.auth = {
+        login: async (email, password) => {
+          if (email === 'test@example.com') return { token: 'mock-token' };
+          throw new Error('Invalid');
+        },
+        logout: () => ({ success: true }),
+        getCredentialsSummary: () => ({ status: 'logged_in' })
+      };
+      mockBroadcast.startSession = async (body) => ({ sessionId: '123' });
+      mockBroadcast.getSession = () => ({ sessionId: '123' });
+      mockBroadcast.stopSession = async () => ({ success: true });
+      mockBroadcast.watchBroadcast = (id) => {};
+
+      server = createServer({ broadcastService: mockBroadcast });
+    });
+
+    it('should handle /api/broadcast/auth/login POST', async () => {
+      const response = await supertest(server)
+        .post('/api/broadcast/auth/login')
+        .send({ email: 'test@example.com', password: 'password' });
+      assert.strictEqual(response.status, 200);
+      assert.strictEqual(response.body.token, 'mock-token');
+
+      const errorResponse = await supertest(server)
+        .post('/api/broadcast/auth/login')
+        .send({ email: 'bad@example.com', password: 'password' });
+      assert.strictEqual(errorResponse.status, 400);
+    });
+
+    it('should handle /api/broadcast/auth/logout POST', async () => {
+      const response = await supertest(server).post('/api/broadcast/auth/logout');
+      assert.strictEqual(response.status, 200);
+      assert.strictEqual(response.body.success, true);
+    });
+
+    it('should handle /api/broadcast/auth/status GET', async () => {
+      const response = await supertest(server).get('/api/broadcast/auth/status');
+      assert.strictEqual(response.status, 200);
+      assert.strictEqual(response.body.status, 'logged_in');
+    });
+
+    it('should handle /api/broadcast/session POST', async () => {
+      const response = await supertest(server).post('/api/broadcast/session').send({});
+      assert.strictEqual(response.status, 200);
+      assert.strictEqual(response.body.sessionId, '123');
+    });
+
+    it('should handle /api/broadcast/session GET', async () => {
+      const response = await supertest(server).get('/api/broadcast/session');
+      assert.strictEqual(response.status, 200);
+      assert.strictEqual(response.body.sessionId, '123');
+    });
+
+    it('should handle /api/broadcast/session DELETE', async () => {
+      const response = await supertest(server).delete('/api/broadcast/session');
+      assert.strictEqual(response.status, 200);
+      assert.strictEqual(response.body.success, true);
+    });
+
+    it('should handle /api/broadcast/watch POST', async () => {
+      const response = await supertest(server).post('/api/broadcast/watch').send({ id: 'some-id' });
+      assert.strictEqual(response.status, 200);
+      assert.strictEqual(response.body.success, true);
+      assert.strictEqual(response.body.watching, 'some-id');
+    });
+
+    it('should handle /api/broadcast/events GET', async () => {
+      const request = supertest(server).get('/api/broadcast/events');
+      request.end((err, res) => {
+          assert.strictEqual(res.status, 200);
+          assert.strictEqual(res.headers['content-type'], 'text/event-stream');
+      });
+      setTimeout(() => request.abort(), 50);
+    });
+  });
+
 });
