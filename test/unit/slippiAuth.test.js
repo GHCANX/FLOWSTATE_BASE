@@ -222,4 +222,69 @@ describe('SlippiAuthClient', () => {
     const inst2 = getSlippiAuth({ credentialsPath });
     assert.strictEqual(inst1, inst2);
   });
+
+  it('loadFromDisk handles invalid JSON', () => {
+    fs.writeFileSync(credentialsPath, 'invalid json');
+    const client = new SlippiAuthClient({ credentialsPath });
+    assert.strictEqual(client.isAuthenticated(), false);
+  });
+
+  it('saveToDisk creates directory if it does not exist', () => {
+    const newDir = path.join(tmpDir, 'new_dir');
+    const newCredsPath = path.join(newDir, 'credentials.json');
+    const client = new SlippiAuthClient({ credentialsPath: newCredsPath });
+    client.fbUid = 'testUid';
+    client.saveToDisk();
+    assert.ok(fs.existsSync(newCredsPath));
+    fs.rmSync(newDir, { recursive: true, force: true });
+  });
+
+  it('saveToDisk handles errors when saving', () => {
+    // Create a directory where the file should be, making it impossible to write a file with that name
+    fs.mkdirSync(credentialsPath);
+    const client = new SlippiAuthClient({ credentialsPath });
+    client.fbUid = 'testUid';
+    client.saveToDisk();
+    // It should not throw, but catch and warn
+    assert.strictEqual(client.fbUid, 'testUid');
+    fs.rmdirSync(credentialsPath);
+  });
+
+  it('refresh handles fetch failure with error message', async () => {
+    const client = new SlippiAuthClient({ credentialsPath });
+    client.refreshToken = 'oldRefreshToken';
+
+    const originalFetch = global.fetch;
+    global.fetch = async () => ({
+      ok: false,
+      status: 400,
+      json: async () => ({
+        error: { message: 'INVALID_REFRESH_TOKEN' }
+      })
+    });
+
+    try {
+      await assert.rejects(client.refresh(), /INVALID_REFRESH_TOKEN/);
+    } finally {
+      global.fetch = originalFetch;
+    }
+  });
+
+  it('_fetchUserProfile handles fetch failure gracefully', async () => {
+    const client = new SlippiAuthClient({ credentialsPath });
+    client.fbUid = 'testUid';
+
+    const originalFetch = global.fetch;
+    global.fetch = async () => {
+      throw new Error('Network error');
+    };
+
+    try {
+      // Should not throw, should just warn and continue
+      await client._fetchUserProfile();
+      assert.strictEqual(client.displayName, null);
+    } finally {
+      global.fetch = originalFetch;
+    }
+  });
 });
