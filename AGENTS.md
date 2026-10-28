@@ -2,7 +2,7 @@
 
 ## 1. Scope & Execution Boundaries
 - **Core Pipeline**: Offline `.slp` replay parsing, quantitative metrics extraction, SQLite storage, and query analytics.
-- **Live Spectator Integration**: Supported via `BroadcastService` (`src/broadcast/broadcastService.js`), exposing session provisioning (`POST /api/broadcast/session`), direct TCP listening (default port 51441 / dynamic fallback), and real-time SSE push (`/api/broadcast/events`).
+- **Live Spectator Integration**: Supported via `BroadcastService` (`src/broadcast/broadcastService.js`) and `SlippiCloudRelayClient` (`src/broadcast/slippiCloudRelay.js`), exposing Official Slippi Cloud Broadcast authentication (`wss://spectate.slippi.gg` via Firebase UID Spectator IDs), direct TCP listening (default port 51441 / dynamic fallback), 10 Hz live stream telemetry, and real-time SSE push (`/api/broadcast/events`).
 - **Out of Scope**: Do NOT implement external video broadcast capturing (OBS/Twitch) or Dolphin/FFmpeg video rendering pipelines unless explicitly requested.
 
 ## 2. Storage & Disk Hygiene (Zero Accumulation)
@@ -43,13 +43,17 @@
 
 ## 8. Live Spectator & Stream Lifecycle Invariants
 - **In-Memory Streaming Only (Zero Disk Accumulation)**:
-  - Live broadcast streams must be piped directly into `SlpStream` / `SlpParser` in memory. Never write live incoming stream bytes to `./temp_slp/` or disk.
-- **Handshake Chunk Buffering**:
-  - Binary TCP packets may arrive fragmented down to 1 byte. Ingestion buffers must accumulate incoming chunks until the full 0x35 `gameStart` payload header is parsed.
-- **Parser State Reset on Disconnect**:
-  - Upon remote peer disconnection or stream termination, `SlpStream` instances must be cleanly discarded and re-instantiated to prevent stale parser states across consecutive matches.
-- **Socket & Port Lifecycle Hygiene**:
-  - Maintain an active `Set<net.Socket>` of connected client streams. On `DELETE /api/broadcast/session` or server shutdown, destroy all sockets before closing the server to prevent lingering handles and `EADDRINUSE` port collision errors.
+  - Live broadcast streams must be piped directly into `SlpStream` / `SlpParser` in memory. Never write live incoming stream bytes to `./temp_slp/` or disk; completed matches are archived strictly via Dual-Storage (`analytics.db` + `payloads/YYYY/MM/<id>.json.gz`) on `GAME_END` (`0x39`).
+- **Multi-Format Relay & Pre-Game Byte Isolation**:
+  - Normalize all Slippi cloud and local relay envelopes (`game_event`, batched `events`, `menu_event`) across raw `Buffer`, `Uint8Array`, byte array, and base64 formats, as well as broadcast target schemas (`id`/`broadcastId`, `target`/`viewerKey`/`spectatorId`).
+  - Accumulate fragmented pre-`0x35` (`GAME_START`) chunks in an isolated `_preGameBuffer` (capped at 64 KB). Never append pre-game menu bytes to the match `.slp` archive buffer (`_matchBuffer`); only record match bytes from `0x35` through `0x39`.
+- **10 Hz Telemetry Throttling & Immediate State Transitions**:
+  - Ingest stream chunks synchronously in memory, but throttle SSE `telemetry` emissions (`chunkCount`, `bytesIngested`, `throughputKbps`) to 10 Hz (`100ms`) with an automatic idle decay timer to prevent event-loop and DOM saturation.
+  - Discrete state transitions (`LISTENING`, `CONNECTED_TO_STREAM`, `MENUS_ACTIVE`, `IN_GAME`, `GAME_END`) must dispatch immediately without throttling.
+- **Parser State Reset Across Consecutive Games & Disconnects**:
+  - Upon `GAME_END` (`0x39`), cleanly discard and re-instantiate `SlpStream` to prevent byte-alignment corruption on the next game while preserving overall broadcast session and uptime continuity (`MENUS_ACTIVE` / `CONNECTED_TO_STREAM`).
+- **Socket, Timer & Port Lifecycle Hygiene**:
+  - Maintain an active `Set<net.Socket>` of connected client streams and track all telemetry throttle/decay timers. On `DELETE /api/broadcast/session` or server shutdown, clear all timers and destroy all sockets before closing the server to prevent lingering handles and `EADDRINUSE` port collision errors.
 
 ## 9. Test Concurrency & Database Tracking Hygiene
 - **Serial Test File Execution**:
