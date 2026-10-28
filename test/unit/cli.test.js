@@ -39,6 +39,13 @@ describe('CLI utility: resolveStageId', () => {
     assert.strictEqual(resolveStageId('  LeGaL '), '31,32,28,8,2,3');
   });
 
+  it('handles spaces and punctuation in stage names', () => {
+    assert.strictEqual(resolveStageId('Final Destination'), '32');
+    assert.strictEqual(resolveStageId("Yoshi's Story"), '8');
+    assert.strictEqual(resolveStageId("Pokemon Stadium"), '3');
+    assert.strictEqual(resolveStageId('fountain of dreams'), '2');
+  });
+
   it('returns the original string if it is not a known preset or stage', () => {
     assert.strictEqual(resolveStageId('mutescity'), 'mutescity');
     assert.strictEqual(resolveStageId('15'), '15');
